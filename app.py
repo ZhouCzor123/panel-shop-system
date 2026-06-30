@@ -11,6 +11,7 @@ def load_data():
     if os.path.exists(EXCEL_FILE):
         return pd.read_excel(EXCEL_FILE, dtype={'Part Number': str, 'Barcode': str})
     else:
+        # Create default sheet structure if missing or broken
         df = pd.DataFrame(columns=['Part Number', 'Part Name', 'Qty on Hand', 'Location', 'Project', 'Barcode'])
         df.to_excel(EXCEL_FILE, index=False)
         return df
@@ -19,10 +20,7 @@ def save_data(df):
     df.to_excel(EXCEL_FILE, index=False)
 
 def is_valid_location(loc_string):
-    """Validates that location matches Rack A-E and Shelf 1-3 (e.g., A1, B3, E2)"""
-    # Clean up spaces and convert to uppercase
     clean_loc = loc_string.strip().upper()
-    # Regular expression: Starts with A, B, C, D, or E, followed exactly by 1, 2, or 3
     pattern = r"^[A-E][1-3]$"
     return bool(re.match(pattern, clean_loc)), clean_loc
 
@@ -59,8 +57,8 @@ def smart_search(query):
     if not query:
         return pd.DataFrame()
     return df[
-        (df['Barcode'] == query) | 
-        (df['Part Number'] == query) | 
+        (df['Barcode'].astype(str) == query) | 
+        (df['Part Number'].astype(str) == query) | 
         (df['Part Name'].str.contains(query, case=False, na=False))
     ]
 
@@ -97,18 +95,15 @@ with tab2:
             st.info("💡 Brand new item detected! Fill out the cells below to add it to Excel:")
             new_num = st.text_input("Part Number:")
             new_name = st.text_input("Part Name:")
-            new_qty = st.number_input("Initial Quantity:", min_value=0, step=1)
-            
-            # Location input with validation rules
+            new_qty = st.number_input("Initial Quantity:", min_value=1, step=1)
             new_loc = st.text_input("Storage Location (Allowed: A1-A3 up to E1-E3):")
-            
             new_proj = st.text_input("Project Name:")
             new_bar = st.text_input("Barcode String (Leave blank to match Part Number):")
             
             if st.button("Save Brand New Item"):
                 valid, formatted_loc = is_valid_location(new_loc)
                 if not valid:
-                    st.error("❌ Invalid Location! Format must be a Rack letter (A-E) followed by a Shelf number (1-3). Example: B2")
+                    st.error("❌ Invalid Location! Format must be Rack A-E and Shelf 1-3. Example: B2")
                 else:
                     final_barcode = new_bar if new_bar else new_num
                     new_row = pd.DataFrame([{
@@ -117,7 +112,7 @@ with tab2:
                     }])
                     df = pd.concat([df, new_row], ignore_index=True)
                     save_data(df)
-                    st.success(f"Successfully written to Excel at location [{formatted_loc}]!")
+                    st.success("Successfully written to Excel database!")
                     st.rerun()
         else:
             options = [f"{row['Part Name']} | Project: {row['Project']} | Current Qty: {row['Qty on Hand']} | Location: {row['Location']}" for idx, row in results.iterrows()]
@@ -128,7 +123,7 @@ with tab2:
             if st.button("Confirm Addition"):
                 df.at[row_idx, 'Qty on Hand'] += amt_to_add
                 save_data(df)
-                st.success(f"Excel updated! New Total: {df.at[row_idx, 'Qty on Hand']}")
+                st.success("Stock updated successfully!")
                 st.rerun()
 
 # --- TAB 3: TAKE INVENTORY (-) ---
@@ -148,9 +143,17 @@ with tab3:
             amt_to_sub = st.number_input("How many units are you taking for assembly?", min_value=1, step=1, key="take_amt")
             if st.button("Confirm Removal"):
                 current_stock = df.at[row_idx, 'Qty on Hand']
-                df.at[row_idx, 'Qty on Hand'] = max(0, current_stock - amt_to_sub)
+                new_stock = current_stock - amt_to_sub
+                
+                if new_stock <= 0:
+                    # RULE MATCH: Delete the row entirely from Excel if stock hits 0
+                    df = df.drop(row_idx).reset_index(drop=True)
+                    st.success("Item quantity dropped to 0 and has been removed from the live inventory database!")
+                else:
+                    df.at[row_idx, 'Qty on Hand'] = new_stock
+                    st.success(f"Stock removed! Remaining units: {new_stock}")
+                
                 save_data(df)
-                st.success(f"Excel updated! Remaining Stock: {df.at[row_idx, 'Qty on Hand']}")
                 st.rerun()
 
 # --- TAB 4: CHANGE PART LOCATION ---
@@ -167,7 +170,7 @@ with tab4:
             choice = st.selectbox("Select the item listing you want to move:", options, key="loc_select")
             row_idx = results.index[options.index(choice)]
             
-            new_location = st.text_input(f"Enter new location code (Allowed: A1-A3 up to E1-E3 | Current: {df.at[row_idx, 'Location']}):")
+            new_location = st.text_input(f"Enter new location code (Allowed: A1-A3 up to E1-E3):")
             if st.button("Update Location Cell"):
                 valid, formatted_loc = is_valid_location(new_location)
                 if not valid:
@@ -178,5 +181,7 @@ with tab4:
                     st.success(f"Location cell updated to [{formatted_loc}] in the Excel database!")
                     st.rerun()
 
+# --- MASTER VISUAL OVERVIEW (SIDEBAR) ---
 st.sidebar.header("📋 Live Excel Grid View")
+# Ensure the grid handles display parameters cleanly
 st.sidebar.dataframe(df, use_container_width=True)
