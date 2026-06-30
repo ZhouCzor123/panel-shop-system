@@ -1,8 +1,9 @@
 import streamlit as st
 import pandas as pd
 import os
+import re
 
-# --- CONFIGURATION (UPDATED TO YOUR NEW NAME) ---
+# --- CONFIGURATION ---
 EXCEL_FILE = "PanelShop.Inventory+.xlsx"
 PASSWORD = "PanelShopSecure2026"  
 
@@ -16,6 +17,14 @@ def load_data():
 
 def save_data(df):
     df.to_excel(EXCEL_FILE, index=False)
+
+def is_valid_location(loc_string):
+    """Validates that location matches Rack A-E and Shelf 1-3 (e.g., A1, B3, E2)"""
+    # Clean up spaces and convert to uppercase
+    clean_loc = loc_string.strip().upper()
+    # Regular expression: Starts with A, B, C, D, or E, followed exactly by 1, 2, or 3
+    pattern = r"^[A-E][1-3]$"
+    return bool(re.match(pattern, clean_loc)), clean_loc
 
 # --- WEB PAGE SETUP ---
 st.set_page_config(page_title="Panel Shop Inventory", page_icon="⚡", layout="wide")
@@ -89,20 +98,27 @@ with tab2:
             new_num = st.text_input("Part Number:")
             new_name = st.text_input("Part Name:")
             new_qty = st.number_input("Initial Quantity:", min_value=0, step=1)
-            new_loc = st.text_input("Storage Location (e.g., Bin A3):")
+            
+            # Location input with validation rules
+            new_loc = st.text_input("Storage Location (Allowed: A1-A3 up to E1-E3):")
+            
             new_proj = st.text_input("Project Name:")
             new_bar = st.text_input("Barcode String (Leave blank to match Part Number):")
             
             if st.button("Save Brand New Item"):
-                final_barcode = new_bar if new_bar else new_num
-                new_row = pd.DataFrame([{
-                    "Part Number": new_num, "Part Name": new_name, "Qty on Hand": new_qty, 
-                    "Location": new_loc, "Project": new_proj, "Barcode": final_barcode
-                }])
-                df = pd.concat([df, new_row], ignore_index=True)
-                save_data(df)
-                st.success("Successfully written to Excel!")
-                st.rerun()
+                valid, formatted_loc = is_valid_location(new_loc)
+                if not valid:
+                    st.error("❌ Invalid Location! Format must be a Rack letter (A-E) followed by a Shelf number (1-3). Example: B2")
+                else:
+                    final_barcode = new_bar if new_bar else new_num
+                    new_row = pd.DataFrame([{
+                        "Part Number": new_num, "Part Name": new_name, "Qty on Hand": new_qty, 
+                        "Location": formatted_loc, "Project": new_proj, "Barcode": final_barcode
+                    }])
+                    df = pd.concat([df, new_row], ignore_index=True)
+                    save_data(df)
+                    st.success(f"Successfully written to Excel at location [{formatted_loc}]!")
+                    st.rerun()
         else:
             options = [f"{row['Part Name']} | Project: {row['Project']} | Current Qty: {row['Qty on Hand']} | Location: {row['Location']}" for idx, row in results.iterrows()]
             choice = st.selectbox("Select the correct item row to add stock to:", options, key="add_select")
@@ -151,12 +167,15 @@ with tab4:
             choice = st.selectbox("Select the item listing you want to move:", options, key="loc_select")
             row_idx = results.index[options.index(choice)]
             
-            new_location = st.text_input(f"Enter new location code for this part (Current: {df.at[row_idx, 'Location']}):")
+            new_location = st.text_input(f"Enter new location code (Allowed: A1-A3 up to E1-E3 | Current: {df.at[row_idx, 'Location']}):")
             if st.button("Update Location Cell"):
-                if new_location:
-                    df.at[row_idx, 'Location'] = new_location
+                valid, formatted_loc = is_valid_location(new_location)
+                if not valid:
+                    st.error("❌ Invalid Location! Must be a letter from A-E and a number from 1-3. Example: C1")
+                else:
+                    df.at[row_idx, 'Location'] = formatted_loc
                     save_data(df)
-                    st.success(f"Location cell updated to [{new_location}] in the Excel database!")
+                    st.success(f"Location cell updated to [{formatted_loc}] in the Excel database!")
                     st.rerun()
 
 st.sidebar.header("📋 Live Excel Grid View")
