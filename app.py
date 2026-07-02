@@ -3,7 +3,6 @@ import pandas as pd
 import os
 import re
 
-# --- CONFIGURATION ---
 EXCEL_FILE = "PanelShop.Inventory+.xlsx"
 PASSWORD = "PanelShopSecure2026"  
 
@@ -11,7 +10,6 @@ def load_data():
     if os.path.exists(EXCEL_FILE):
         return pd.read_excel(EXCEL_FILE, dtype={'Part Number': str, 'Barcode': str})
     else:
-        # Create default sheet structure if missing or broken
         df = pd.DataFrame(columns=['Part Number', 'Part Name', 'Qty on Hand', 'Location', 'Project', 'Barcode'])
         df.to_excel(EXCEL_FILE, index=False)
         return df
@@ -24,33 +22,30 @@ def is_valid_location(loc_string):
     pattern = r"^[A-E][1-3]$"
     return bool(re.match(pattern, clean_loc)), clean_loc
 
-# --- WEB PAGE SETUP ---
-st.set_page_config(page_title="Panel Shop Inventory", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Panel Shop Inventory", layout="wide")
 
-# --- PASSWORD GATE ---
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 
 if not st.session_state["authenticated"]:
-    st.title("🔒 Panel Shop Inventory Login")
+    st.title("Panel Shop Inventory Login")
     user_pass = st.text_input("Enter Shop Password:", type="password")
     if st.button("Login"):
         if user_pass == PASSWORD:
             st.session_state["authenticated"] = True
             st.rerun()
         else:
-            st.error("❌ Incorrect Password. Access Denied.")
+            st.error("Incorrect Password. Access Denied.")
     st.stop()
 
-# --- APP HEADER & DATA LOADING ---
-st.title("⚡ Panel Shop Barcode Inventory System")
+st.title("Panel Shop Barcode Inventory System")
 df = load_data()
 
 tab1, tab2, tab3, tab4 = st.tabs([
-    "🔍 Scan & Search", 
-    "📥 Add Inventory (+)", 
-    "📤 Take Inventory (-)", 
-    "📍 Change Part Location"
+    "Scan Search", 
+    "Add Inventory", 
+    "Take Inventory", 
+    "Change Part Location"
 ])
 
 def smart_search(query):
@@ -62,7 +57,6 @@ def smart_search(query):
         (df['Part Name'].str.contains(query, case=False, na=False))
     ]
 
-# --- TAB 1: SCAN & SEARCH ---
 with tab1:
     st.header("Search Database")
     search_query = st.text_input("Click here to SCAN a barcode, or TYPE a part name/number:", key="search_input").strip()
@@ -84,7 +78,6 @@ with tab1:
         else:
             st.error(f"No parts match your search for '{search_query}'.")
 
-# --- TAB 2: ADD INVENTORY (+) ---
 with tab2:
     st.header("Receive / Add Stock")
     add_query = st.text_input("Scan or Type part to ADD stock:", key="add_input").strip()
@@ -92,7 +85,7 @@ with tab2:
     if add_query:
         results = smart_search(add_query)
         if results.empty:
-            st.info("💡 Brand new item detected! Fill out the cells below to add it to Excel:")
+            st.info("Brand new item detected! Fill out the cells below to add it to Excel:")
             new_num = st.text_input("Part Number:")
             new_name = st.text_input("Part Name:")
             new_qty = st.number_input("Initial Quantity:", min_value=1, step=1)
@@ -103,17 +96,27 @@ with tab2:
             if st.button("Save Brand New Item"):
                 valid, formatted_loc = is_valid_location(new_loc)
                 if not valid:
-                    st.error("❌ Invalid Location! Format must be Rack A-E and Shelf 1-3. Example: B2")
+                    st.error("Invalid Location! Format must be Rack A-E and Shelf 1-3. Example: B2")
                 else:
                     final_barcode = new_bar if new_bar else new_num
-                    new_row = pd.DataFrame([{
-                        "Part Number": new_num, "Part Name": new_name, "Qty on Hand": new_qty, 
-                        "Location": formatted_loc, "Project": new_proj, "Barcode": final_barcode
-                    }])
-                    df = pd.concat([df, new_row], ignore_index=True)
-                    save_data(df)
-                    st.success("Successfully written to Excel database!")
-                    st.rerun()
+                    
+                    duplicate_check = df[
+                        (df['Part Number'] == new_num) & 
+                        (df['Location'] == formatted_loc) & 
+                        (df['Project'] == new_proj)
+                    ]
+                    
+                    if not duplicate_check.empty:
+                        st.error("This exact part is already registered at this location for this project. Use the quantity selector below instead.")
+                    else:
+                        new_row = pd.DataFrame([{
+                            "Part Number": new_num, "Part Name": new_name, "Qty on Hand": new_qty, 
+                            "Location": formatted_loc, "Project": new_proj, "Barcode": final_barcode
+                        }])
+                        df = pd.concat([df, new_row], ignore_index=True)
+                        save_data(df)
+                        st.success("Successfully written to Excel database!")
+                        st.rerun()
         else:
             options = [f"{row['Part Name']} | Project: {row['Project']} | Current Qty: {row['Qty on Hand']} | Location: {row['Location']}" for idx, row in results.iterrows()]
             choice = st.selectbox("Select the correct item row to add stock to:", options, key="add_select")
@@ -126,7 +129,6 @@ with tab2:
                 st.success("Stock updated successfully!")
                 st.rerun()
 
-# --- TAB 3: TAKE INVENTORY (-) ---
 with tab3:
     st.header("Remove / Assemble Stock")
     take_query = st.text_input("Scan or Type part to TAKE stock:", key="take_input").strip()
@@ -146,7 +148,6 @@ with tab3:
                 new_stock = current_stock - amt_to_sub
                 
                 if new_stock <= 0:
-                    # RULE MATCH: Delete the row entirely from Excel if stock hits 0
                     df = df.drop(row_idx).reset_index(drop=True)
                     st.success("Item quantity dropped to 0 and has been removed from the live inventory database!")
                 else:
@@ -156,7 +157,6 @@ with tab3:
                 save_data(df)
                 st.rerun()
 
-# --- TAB 4: CHANGE PART LOCATION ---
 with tab4:
     st.header("Move Parts to a New Location/Bin")
     loc_query = st.text_input("Scan or Type part to change its LOCATION:", key="loc_input").strip()
@@ -174,14 +174,12 @@ with tab4:
             if st.button("Update Location Cell"):
                 valid, formatted_loc = is_valid_location(new_location)
                 if not valid:
-                    st.error("❌ Invalid Location! Must be a letter from A-E and a number from 1-3. Example: C1")
+                    st.error("Invalid Location! Must be a letter from A-E and a number from 1-3. Example: C1")
                 else:
                     df.at[row_idx, 'Location'] = formatted_loc
                     save_data(df)
                     st.success(f"Location cell updated to [{formatted_loc}] in the Excel database!")
                     st.rerun()
 
-# --- MASTER VISUAL OVERVIEW (SIDEBAR) ---
-st.sidebar.header("📋 Live Excel Grid View")
-# Ensure the grid handles display parameters cleanly
+st.sidebar.header("Live Excel Grid View")
 st.sidebar.dataframe(df, use_container_width=True)
