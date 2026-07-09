@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import barcode
+from barcode import Code128
 from barcode.writer import ImageWriter
 from io import BytesIO
 import re
@@ -19,10 +19,8 @@ def is_valid_location(loc_string):
 
 def generate_barcode_image(part_number):
     try:
-        code128 = barcode.get_indexer()['code128']
-        my_code = code128(part_number, writer=ImageWriter())
         buffer = BytesIO()
-        my_code.write(buffer)
+        Code128(str(part_number), writer=ImageWriter()).write(buffer)
         return buffer.getvalue()
     except Exception:
         return None
