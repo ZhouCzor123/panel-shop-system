@@ -76,7 +76,15 @@ with tab1:
                     
                     barcode_img = generate_barcode_image(str(row['Part Number']))
                     if barcode_img:
-                        st.image(barcode_img, caption=f"Scan Label for {row['Part Number']}", width=300)
+                        st.image(barcode_img, caption=f"Visual Label Representation for {row['Part Number']}", width=300)
+                        
+                        st.download_button(
+                            label=f"Download Printable Label for {row['Part Number']}",
+                            data=barcode_img,
+                            file_name=f"label_{row['Part Number']}.png",
+                            mime="image/png",
+                            key=f"dl_{idx}"
+                        )
                     st.markdown("---")
         else:
             st.error(f"No parts match your search for '{search_query}'.")
