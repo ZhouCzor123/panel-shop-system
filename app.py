@@ -4,13 +4,41 @@ from barcode import Code128
 from barcode.writer import ImageWriter
 from io import BytesIO
 import re
+import os
 
+DATA_FILE = "inventory_data.json"
+LOG_FILE = "inventory_log.json"
 PASSWORD = "PanelShopSecure2026"
 
-if "inventory_db" not in st.session_state:
-    st.session_state["inventory_db"] = pd.DataFrame(
-        columns=['Part Number', 'Part Name', 'Qty on Hand', 'Location', 'Project']
-    )
+def load_permanent_data():
+    if os.path.exists(DATA_FILE):
+        return pd.read_json(DATA_FILE, dtype={'Part Number': str})
+    else:
+        return pd.DataFrame(columns=['Part Number', 'Part Name', 'Qty on Hand', 'Location', 'Project'])
+
+def save_permanent_data(df):
+    df.to_json(DATA_FILE, orient="records")
+
+def load_logs():
+    if os.path.exists(LOG_FILE):
+        return pd.read_json(LOG_FILE, dtype={'Part Number': str})
+    else:
+        return pd.DataFrame(columns=['Timestamp', 'Action', 'Part Number', 'Part Name', 'Details'])
+
+def save_logs(df):
+    df.to_json(LOG_FILE, orient="records")
+
+def log_event(action, part_num, part_name, details):
+    log_df = load_logs()
+    new_log = pd.DataFrame([{
+        'Timestamp': pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
+        'Action': action,
+        'Part Number': str(part_num),
+        'Part Name': str(part_name),
+        'Details': str(details)
+    }])
+    log_df = pd.concat([log_df, new_log], ignore_index=True)
+    save_logs(log_df)
 
 def is_valid_location(loc_string):
     clean_loc = loc_string.strip().upper()
@@ -42,13 +70,14 @@ if not st.session_state["authenticated"]:
     st.stop()
 
 st.title("Panel Shop Barcode Inventory System")
-df = st.session_state["inventory_db"]
+df = load_permanent_data()
 
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "Scan Search", 
     "Add Inventory", 
     "Take Inventory", 
-    "Change Part Location"
+    "Change Part Location",
+    "Log History"
 ])
 
 with tab1:
@@ -123,8 +152,10 @@ with tab2:
                             "Part Number": new_num, "Part Name": new_name, "Qty on Hand": new_qty, 
                             "Location": formatted_loc, "Project": new_proj
                         }])
-                        st.session_state["inventory_db"] = pd.concat([df, new_row], ignore_index=True)
-                        st.success("Successfully registered item in system memory!")
+                        df = pd.concat([df, new_row], ignore_index=True)
+                        save_permanent_data(df)
+                        log_event("Added", new_num, new_name, f"Registered new item. Initial Qty: {new_qty} at {formatted_loc}")
+                        st.success("Successfully registered item permanently!")
                         st.rerun()
         else:
             options = [f"{row['Part Name']} | Project: {row['Project']} | Current Qty: {row['Qty on Hand']} | Location: {row['Location']}" for idx, row in results.iterrows()]
@@ -133,8 +164,10 @@ with tab2:
             
             amt_to_add = st.number_input("How many units are you adding?", min_value=1, step=1, key="add_amt")
             if st.button("Confirm Addition"):
-                st.session_state["inventory_db"].at[row_idx, 'Qty on Hand'] += amt_to_add
-                st.success("Stock updated successfully!")
+                df.at[row_idx, 'Qty on Hand'] += amt_to_add
+                save_permanent_data(df)
+                log_event("Added", df.at[row_idx, 'Part Number'], df.at[row_idx, 'Part Name'], f"Added {amt_to_add} units. New Total: {df.at[row_idx, 'Qty on Hand']}")
+                st.success("Stock updated permanently!")
                 st.rerun()
 
 with tab3:
@@ -157,14 +190,20 @@ with tab3:
             amt_to_sub = st.number_input("How many units are you taking for assembly?", min_value=1, step=1, key="take_amt")
             if st.button("Confirm Removal"):
                 current_stock = df.at[row_idx, 'Qty on Hand']
+                part_num = df.at[row_idx, 'Part Number']
+                part_name = df.at[row_idx, 'Part Name']
                 new_stock = current_stock - amt_to_sub
                 
                 if new_stock <= 0:
-                    st.session_state["inventory_db"] = df.drop(row_idx).reset_index(drop=True)
+                    df = df.drop(row_idx).reset_index(drop=True)
+                    log_event("Removed", part_num, part_name, f"Removed {amt_to_sub} units. Stock hit 0, item deleted.")
                     st.success("Item quantity dropped to 0 and has been removed from live inventory!")
                 else:
-                    st.session_state["inventory_db"].at[row_idx, 'Qty on Hand'] = new_stock
+                    df.at[row_idx, 'Qty on Hand'] = new_stock
+                    log_event("Removed", part_num, part_name, f"Removed {amt_to_sub} units. Remaining: {new_stock}")
                     st.success(f"Stock removed! Remaining units: {new_stock}")
+                
+                save_permanent_data(df)
                 st.rerun()
 
 with tab4:
@@ -190,9 +229,28 @@ with tab4:
                 if not valid:
                     st.error("Invalid Location! Must be a letter from A-E and a number from 1-3. Example: C1")
                 else:
-                    st.session_state["inventory_db"].at[row_idx, 'Location'] = formatted_loc
-                    st.success(f"Location updated to [{formatted_loc}]!")
+                    old_loc = df.at[row_idx, 'Location']
+                    part_num = df.at[row_idx, 'Part Number']
+                    part_name = df.at[row_idx, 'Part Name']
+                    
+                    df.at[row_idx, 'Location'] = formatted_loc
+                    save_permanent_data(df)
+                    log_event("Moved", part_num, part_name, f"Moved from {old_loc} to {formatted_loc}")
+                    st.success(f"Location permanently updated to [{formatted_loc}]!")
                     st.rerun()
 
+with tab5:
+    st.header("Activity Log History")
+    log_df = load_logs()
+    if log_df.empty:
+        st.info("No activity logged yet.")
+    else:
+        action_filter = st.selectbox("Filter by Action:", ["All", "Added", "Removed", "Moved"])
+        filtered_logs = log_df
+        if action_filter != "All":
+            filtered_logs = log_df[log_df['Action'] == action_filter]
+        
+        st.dataframe(filtered_logs.iloc[::-1], use_container_width=True)
+
 st.sidebar.header("Live Inventory Grid View")
-st.sidebar.dataframe(st.session_state["inventory_db"], use_container_width=True)
+st.sidebar.dataframe(df, use_container_width=True)
