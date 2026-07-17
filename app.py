@@ -12,9 +12,12 @@ PASSWORD = "PanelShopSecure2026"
 
 def load_permanent_data():
     if os.path.exists(DATA_FILE):
-        return pd.read_json(DATA_FILE, dtype={'Part Number': str})
+        df = pd.read_json(DATA_FILE, dtype={'Part Number': str})
+        if 'Min Qty' not in df.columns:
+            df['Min Qty'] = 0
+        return df
     else:
-        return pd.DataFrame(columns=['Part Number', 'Part Name', 'Qty on Hand', 'Location', 'Project'])
+        return pd.DataFrame(columns=['Part Number', 'Part Name', 'Qty on Hand', 'Location', 'Project', 'Min Qty'])
 
 def save_permanent_data(df):
     df.to_json(DATA_FILE, orient="records")
@@ -42,7 +45,7 @@ def log_event(action, part_num, part_name, details):
 
 def is_valid_location(loc_string):
     clean_loc = loc_string.strip().upper()
-    pattern = r"^[A-E][1-3]$"
+    pattern = r"^[A-G][1-3]$"
     return bool(re.match(pattern, clean_loc)), clean_loc
 
 def generate_barcode_image(part_number):
@@ -53,7 +56,22 @@ def generate_barcode_image(part_number):
     except Exception:
         return None
 
-st.set_page_config(page_title="Panel Shop Inventory", layout="wide")
+def highlight_shortages(row):
+    try:
+        min_qty = float(row['Min Qty']) if pd.notna(row['Min Qty']) else 0
+        current_qty = float(row['Qty on Hand']) if pd.notna(row['Qty on Hand']) else 0
+    except ValueError:
+        min_qty, current_qty = 0, 0
+    
+    if current_qty <= min_qty and min_qty > 0:
+        return ['background-color: #ffcccc; color: #900000; font-weight: bold'] * len(row)
+    return [''] * len(row)
+
+st.set_page_config(
+    page_title="Panel Shop Inventory", 
+    page_icon="BlackMcDonald_Logo.webp", 
+    layout="wide"
+)
 
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
@@ -94,12 +112,13 @@ with tab1:
             st.success(f"Found {len(results)} matching item(s):")
             for idx, row in results.iterrows():
                 with st.container():
-                    col1, col2, col3, col4, col5 = st.columns(5)
+                    col1, col2, col3, col4, col5, col6 = st.columns(6)
                     col1.metric("Part Number", str(row['Part Number']))
                     col2.metric("Part Name", str(row['Part Name']))
                     col3.metric("Quantity", int(row['Qty on Hand']))
                     col4.metric("Location", f"[{row['Location']}]")
                     col5.metric("Project Name", str(row['Project']))
+                    col6.metric("Min Qty Alert Level", int(row['Min Qty']) if pd.notna(row['Min Qty']) else 0)
                     
                     barcode_img = generate_barcode_image(str(row['Part Number']))
                     if barcode_img:
@@ -131,13 +150,14 @@ with tab2:
             new_num = st.text_input("Part Number (This will become the barcode text):")
             new_name = st.text_input("Part Name:")
             new_qty = st.number_input("Initial Quantity:", min_value=1, step=1)
-            new_loc = st.text_input("Storage Location (Allowed: A1-A3 up to E1-E3):")
+            new_loc = st.text_input("Storage Location (Allowed: A1-A3 up to G1-G3):")
             new_proj = st.text_input("Project Name:")
+            new_min_qty = st.number_input("Minimum Quantity Alert Threshold (Optional, set 0 for None):", min_value=0, step=1, value=0)
             
             if st.button("Save Brand New Item"):
                 valid, formatted_loc = is_valid_location(new_loc)
                 if not valid:
-                    st.error("Invalid Location! Format must be Rack A-E and Shelf 1-3. Example: B2")
+                    st.error("Invalid Location! Format must be Rack A-G and Shelf 1-3. Example: F2")
                 else:
                     duplicate_check = df[
                         (df['Part Number'] == new_num) & 
@@ -150,11 +170,11 @@ with tab2:
                     else:
                         new_row = pd.DataFrame([{
                             "Part Number": new_num, "Part Name": new_name, "Qty on Hand": new_qty, 
-                            "Location": formatted_loc, "Project": new_proj
+                            "Location": formatted_loc, "Project": new_proj, "Min Qty": new_min_qty
                         }])
                         df = pd.concat([df, new_row], ignore_index=True)
                         save_permanent_data(df)
-                        log_event("Added", new_num, new_name, f"Registered new item. Initial Qty: {new_qty} at {formatted_loc}")
+                        log_event("Added", new_num, new_name, f"Registered new item. Initial Qty: {new_qty} at {formatted_loc}. Min Qty Limit set to {new_min_qty}")
                         st.success("Successfully registered item permanently!")
                         st.rerun()
         else:
@@ -163,10 +183,13 @@ with tab2:
             row_idx = results.index[options.index(choice)]
             
             amt_to_add = st.number_input("How many units are you adding?", min_value=1, step=1, key="add_amt")
+            new_min_qty = st.number_input(f"Update Minimum Quantity Alert Level (Current: {df.at[row_idx, 'Min Qty']}):", min_value=0, step=1, value=int(df.at[row_idx, 'Min Qty']))
+            
             if st.button("Confirm Addition"):
                 df.at[row_idx, 'Qty on Hand'] += amt_to_add
+                df.at[row_idx, 'Min Qty'] = new_min_qty
                 save_permanent_data(df)
-                log_event("Added", df.at[row_idx, 'Part Number'], df.at[row_idx, 'Part Name'], f"Added {amt_to_add} units. New Total: {df.at[row_idx, 'Qty on Hand']}")
+                log_event("Added", df.at[row_idx, 'Part Number'], df.at[row_idx, 'Part Name'], f"Added {amt_to_add} units. New Total: {df.at[row_idx, 'Qty on Hand']}. Min Qty adjusted to {new_min_qty}")
                 st.success("Stock updated permanently!")
                 st.rerun()
 
@@ -192,16 +215,23 @@ with tab3:
                 current_stock = df.at[row_idx, 'Qty on Hand']
                 part_num = df.at[row_idx, 'Part Number']
                 part_name = df.at[row_idx, 'Part Name']
+                min_threshold = df.at[row_idx, 'Min Qty']
                 new_stock = current_stock - amt_to_sub
                 
                 if new_stock <= 0:
                     df = df.drop(row_idx).reset_index(drop=True)
                     log_event("Removed", part_num, part_name, f"Removed {amt_to_sub} units. Stock hit 0, item deleted.")
-                    st.success("Item quantity dropped to 0 and has been removed from live inventory!")
+                    st.toast(f"🚨 ALERT: {part_name} has hit 0 and is completely out of stock!", icon="🚨")
+                    st.success("Item quantity dropped to 0 and has been removed from permanent inventory!")
                 else:
                     df.at[row_idx, 'Qty on Hand'] = new_stock
                     log_event("Removed", part_num, part_name, f"Removed {amt_to_sub} units. Remaining: {new_stock}")
-                    st.success(f"Stock removed! Remaining units: {new_stock}")
+                    
+                    if new_stock <= min_threshold and min_threshold > 0:
+                        st.warning(f"⚠️ LOW STOCK ALERT: {part_name} is down to {new_stock} units! (Minimum threshold: {min_threshold})")
+                        st.toast(f"Low Stock Alert: {part_name} needs reordering!", icon="⚠️")
+                    else:
+                        st.success(f"Stock removed! Remaining units: {new_stock}")
                 
                 save_permanent_data(df)
                 st.rerun()
@@ -223,11 +253,11 @@ with tab4:
             choice = st.selectbox("Select the item listing you want to move:", options, key="loc_select")
             row_idx = results.index[options.index(choice)]
             
-            new_location = st.text_input(f"Enter new location code (Allowed: A1-A3 up to E1-E3):")
+            new_location = st.text_input(f"Enter new location code (Allowed: A1-A3 up to G1-G3):")
             if st.button("Update Location"):
                 valid, formatted_loc = is_valid_location(new_location)
                 if not valid:
-                    st.error("Invalid Location! Must be a letter from A-E and a number from 1-3. Example: C1")
+                    st.error("Invalid Location! Must be a letter from A-G and a number from 1-3. Example: F1")
                 else:
                     old_loc = df.at[row_idx, 'Location']
                     part_num = df.at[row_idx, 'Part Number']
@@ -253,4 +283,6 @@ with tab5:
         st.dataframe(filtered_logs.iloc[::-1], use_container_width=True)
 
 st.sidebar.header("Live Inventory Grid View")
-st.sidebar.dataframe(df, use_container_width=True)
+# We style the sidebar list dynamically using our highlight_shortages function
+styled_df = df.style.apply(highlight_shortages, axis=1)
+st.sidebar.dataframe(styled_df, use_container_width=True)
