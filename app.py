@@ -5,8 +5,19 @@ from barcode import Code128
 from barcode.writer import ImageWriter
 from io import BytesIO
 import re
+import base64
 
 PASSWORD = "PanelShopSecure2026"
+
+# Inject encoded Base64 private key into standard st.secrets for gsheets connection
+if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
+    if "private_key_base64" in st.secrets["connections"]:
+        try:
+            decoded_key = base64.b64decode(st.secrets["connections"]["private_key_base64"]).decode("utf-8")
+            # Replace escaped literal raw newline markers with real string breaks
+            st.secrets["connections"]["private_key"] = decoded_key.replace("\\n", "\n")
+        except Exception as e:
+            st.error(f"Failed decoding key signature: {e}")
 
 # Connect to Google Sheets Connection Manager
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -292,7 +303,7 @@ st.sidebar.markdown(
     """
     <div style='text-align: center; color: gray; font-size: 0.8em;'>
         <b>Panel Shop Inventory System v2.0</b><br>
-        Designed & Built by <b>Zhou lung Czornoba</b><br>
+        Designed & Built by <b>Your Name</b><br>
         Co-op Term 2026
     </div>
     """, 
