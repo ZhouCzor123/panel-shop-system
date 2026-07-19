@@ -10,6 +10,7 @@ PASSWORD = "PanelShopSecure2026"
 
 # Hardcoded service account credentials dictionary to completely bypass picky TOML parsers
 service_account_info = {
+    "type": "service_account",
     "project_id": "aqueous-glyph-502919-b1",
     "private_key_id": "3fe21201df09ef4fa447b63a02c26ce8c96aa76d",
     "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDJSVUyHuN9UriE\nIqekP9i64Qb+r8FvjNBa9AtgRcqrQMuvRuikKsBwRqPnLbsShOPuuLCvqtzY02uS\nnBeGkmObTgZmHQw3IiRyEk3If4keAAidVJ0/KEYp89KPpH3S4J0adNycczynw8\nJ1\nvNxOEmJDbh3Zqqc2G1Owqg38od/DwTtwSEjWmq/ACdSYdJTiY4Mw8BxaqTRLH0SWO\nnn3kgw9RpP4CgzkYv/YRM/pipSit+6LAzgrwHdeIccLuziEzDhfBlgWtjGrVnywFQ\nnc/P4+biLGMxgkxwyrIJXrQgpca3DMZdM1R8fvKowt5pwNVb8PgKIZYCKQD2\nkcqD\nc3HF3KhHAgMBAAECggEAJjF6dHTYQn/h4DcpL98byIKYcrwxHbDz1jHrC6YyXgBY\nPqLOnYmRslIT6yq87wVQKK0jLQnXtUS=mDPOnsmNMY6t+LZL4SI51z2StM5H9ZwS\nn+ABHf/bu+IzNhh/8SSoCKTIAaQjZWM50kUDCwwzb5x2YrBMUeBMbPcI8yh\nTU4Nx8\nxXYMNhsfaIHUKmb6lOCk+NxOQWQInpDcGdfq0h/pRpEd5SsFkXPbP+cum6yQrWYnt\nwKd1M488o8cK02g4tHC6VT7EQnd9o5XT47q/GexR/gCpcv2cd1/PcA/ZwJoHh2ww\nhKjwI0s4o/Fa8aPdZdnTfftk2PjIigyYjdkjvSVVOKBgQD5Ny2kkbz\nBzmE9o4w\ntPzeXYPgiq2esAUtjQQ93hBcWCt1yZmL+MKtaxzyU+LNYNlDuqvXg3PaTweQuz9g\nnTkTv7ZPWntrZlPKmB9fm7DdbksOc0mTGfAER1j/0X25Y+9++I83owHS1LfprRiD\nqM3abBwl8NduXIPZHhQg0Ak2dKBgQDoB1jm+QxeqSgnPbrnG00JD9\n/t=6gcBSLE\nnaEo4EgWNDi7f/YXN3IaEPXVZgLL/6JZCRR/4d2aGLj0Yc7W4gpa19LyEjvBtiN7z\nn5KS34akwvTc2Q3zzNZPLYKzAlPFecNzu17lTfwxo4SbAB/YYeOGLWT/Pdt+onsIb\nT7Dcai3sKwBGbDFRNCY4maFd6c5gPeTS88lwFfFPDBxquTEyXUy\nNMOYIsKUIjkr\nNC+fnj/iOERYWOY2GNKVbwif7N6jy2YHIRFNYFu/jzXJZATCJmrzRwzf3DXLKWLx\nn08IVGhKVoEWG+pCJx1j9M2/Mj8jMw1c1p+05ia0dTmF6Xif0t5YMGFNAoGaB8L2\ nta2V1dxs6DnSa3UdEsJmcLhzTiA1r3Hq5K13ZiYmMLXv/hR1Oz\njuxHMZ9dRdLSmx\nYlp6RiDYCnMMQ4VnxMDoIzgj0JIuy@qhjvBkC+yC7Lzi++ViY63e0TEP4ezcn+5o\nn5iQvUsS6rvjgeOYyjlg+ZLqt4eN5oUGmtd5CVDsCgYBW9Mp3PMBoESMS2ewoClPa\nnqhMBNHF0N0UXhoy4z92wdKahNyNCnqU2YbOZKH33AKPVEOx\nnvuKEnlGXr37mTaV\neCy3Xub19FjNd/+4/cK5G1twrGdlq91S3kMelHjIKYc1wlbegsXvLAHC6/NGCgn\nn9N9JdFHdzhQq2jubD8TYPg==\n-----END PRIVATE KEY-----\n",
@@ -21,11 +22,11 @@ service_account_info = {
     "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/panel-shop-editor%40aqueous-glyph-502919-b1.iam.gserviceaccount.com"
 }
 
-# Connect to Google Sheets by passing only the service account credentials
+# Connect to Google Sheets by nesting credentials under 'secrets_dict' keyword parameter
 conn = st.connection(
     "gsheets",
     type=GSheetsConnection,
-    **service_account_info
+    secrets_dict=service_account_info
 )
 
 def load_permanent_data():
@@ -309,7 +310,7 @@ st.sidebar.markdown(
     """
     <div style='text-align: center; color: gray; font-size: 0.8em;'>
         <b>Panel Shop Inventory System v2.0</b><br>
-        Designed & Built by <b>Zhou lung Czornoba</b><br>
+        Designed & Built by <b>Zhou Czornoba</b><br>
         Co-op Term May-August 2026
     </div>
     """, 
