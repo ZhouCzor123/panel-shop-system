@@ -8,7 +8,7 @@ import re
 
 PASSWORD = "PanelShopSecure2026"
 
-# Hardcoded service account credentials dictionary to completely bypass picky TOML parsers
+# Hardcoded service account configurations
 service_account_info = {
     "type": "service_account",
     "project_id": "aqueous-glyph-502919-b1",
@@ -22,12 +22,17 @@ service_account_info = {
     "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/panel-shop-editor%40aqueous-glyph-502919-b1.iam.gserviceaccount.com"
 }
 
-# Connect to Google Sheets by nesting credentials under 'secrets_dict' keyword parameter
-conn = st.connection(
-    "gsheets",
-    type=GSheetsConnection,
-    secrets_dict=service_account_info
-)
+# Force inject credentials straight into Streamlit's secrets context memory cache
+if "connections" not in st.secrets:
+    st.secrets._secrets = {"connections": {"gsheets": {}}}
+elif "gsheets" not in st.secrets["connections"]:
+    st.secrets["connections"]["gsheets"] = {}
+
+for key, value in service_account_info.items():
+    st.secrets["connections"]["gsheets"][key] = value
+
+# Now the system can seamlessly read standard connection targets natively
+conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_permanent_data():
     df = conn.read(spreadsheet=st.secrets.get("spreadsheet", ""), worksheet="Inventory", ttl=0)
@@ -310,7 +315,7 @@ st.sidebar.markdown(
     """
     <div style='text-align: center; color: gray; font-size: 0.8em;'>
         <b>Panel Shop Inventory System v2.0</b><br>
-        Designed & Built by <b>Zhou Czornoba</b><br>
+        Designed & Built by <b>Zhou Lung</b><br>
         Co-op Term May-August 2026
     </div>
     """, 
