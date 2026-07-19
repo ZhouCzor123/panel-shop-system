@@ -9,12 +9,12 @@ import base64
 
 PASSWORD = "PanelShopSecure2026"
 
-# Inject encoded Base64 private key into standard st.secrets for gsheets connection
+# Inject encoded Base64 private key safely and re-verify key-value bindings
 if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
-    if "private_key_base64" in st.secrets["connections"]:
+    g_secrets = st.secrets["connections"]
+    if "private_key_base64" in g_secrets:
         try:
-            decoded_key = base64.b64decode(st.secrets["connections"]["private_key_base64"]).decode("utf-8")
-            # Replace escaped literal raw newline markers with real string breaks
+            decoded_key = base64.b64decode(g_secrets["private_key_base64"]).decode("utf-8")
             st.secrets["connections"]["private_key"] = decoded_key.replace("\\n", "\n")
         except Exception as e:
             st.error(f"Failed decoding key signature: {e}")
@@ -304,7 +304,7 @@ st.sidebar.markdown(
     <div style='text-align: center; color: gray; font-size: 0.8em;'>
         <b>Panel Shop Inventory System v2.0</b><br>
         Designed & Built by <b>Zhou lung Czornoba</b><br>
-        Co-op Term 2026
+        Co-op Term May-August 2026
     </div>
     """, 
     unsafe_allow_html=True
