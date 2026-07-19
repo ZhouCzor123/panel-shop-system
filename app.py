@@ -1,35 +1,35 @@
 import streamlit as st
 import pandas as pd
+from streamlit_gsheets import GSheetsConnection
 from barcode import Code128
 from barcode.writer import ImageWriter
 from io import BytesIO
 import re
-import os
 
-DATA_FILE = "inventory_data.json"
-LOG_FILE = "inventory_log.json"
 PASSWORD = "PanelShopSecure2026"
 
+# Connect to Google Sheets Connection Manager
+conn = st.connection("gsheets", type=GSheetsConnection)
+
 def load_permanent_data():
-    if os.path.exists(DATA_FILE):
-        df = pd.read_json(DATA_FILE, dtype={'Part Number': str})
-        if 'Min Qty' not in df.columns:
-            df['Min Qty'] = 0
-        return df
-    else:
-        return pd.DataFrame(columns=['Part Number', 'Part Name', 'Qty on Hand', 'Location', 'Project', 'Min Qty'])
+    df = conn.read(worksheet="Inventory", ttl=0)
+    df['Part Number'] = df['Part Number'].astype(str)
+    if 'Min Qty' not in df.columns:
+        df['Min Qty'] = 0
+    return df
 
 def save_permanent_data(df):
-    df.to_json(DATA_FILE, orient="records")
+    conn.update(worksheet="Inventory", data=df)
+    st.cache_data.clear()
 
 def load_logs():
-    if os.path.exists(LOG_FILE):
-        return pd.read_json(LOG_FILE, dtype={'Part Number': str})
-    else:
-        return pd.DataFrame(columns=['Timestamp', 'Action', 'Part Number', 'Part Name', 'Details'])
+    df = conn.read(worksheet="Logs", ttl=0)
+    df['Part Number'] = df['Part Number'].astype(str)
+    return df
 
 def save_logs(df):
-    df.to_json(LOG_FILE, orient="records")
+    conn.update(worksheet="Logs", data=df)
+    st.cache_data.clear()
 
 def log_event(action, part_num, part_name, details):
     log_df = load_logs()
@@ -283,6 +283,18 @@ with tab5:
         st.dataframe(filtered_logs.iloc[::-1], use_container_width=True)
 
 st.sidebar.header("Live Inventory Grid View")
-# We style the sidebar list dynamically using our highlight_shortages function
 styled_df = df.style.apply(highlight_shortages, axis=1)
 st.sidebar.dataframe(styled_df, use_container_width=True)
+
+# --- Your Permanent Legacy Footer ---
+st.sidebar.markdown("---")
+st.sidebar.markdown(
+    """
+    <div style='text-align: center; color: gray; font-size: 0.8em;'>
+        <b>Panel Shop Inventory System v2.0</b><br>
+        Designed & Built by <b>Zhou lung Czornoba</b><br>
+        Co-op Term 2026
+    </div>
+    """, 
+    unsafe_allow_html=True
+)
