@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-from streamlit_gsheets import GSheetsConnection
 from barcode import Code128
 from barcode.writer import ImageWriter
 from io import BytesIO
@@ -8,38 +7,37 @@ import re
 
 PASSWORD = "PanelShopSecure2026"
 
-# Fix escaped newline characters in Streamlit secrets before GSheetsConnection initializes
-try:
-    if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
-        secrets_dict = dict(st.secrets["connections"]["gsheets"])
-        if "private_key" in secrets_dict:
-            # Converts literal '\n' characters into real line break bytes
-            secrets_dict["private_key"] = secrets_dict["private_key"].replace("\\n", "\n")
-            st.secrets._secrets["connections"]["gsheets"] = secrets_dict
-except Exception:
-    pass
-
-# Connect to Google Sheets
-conn = st.connection("gsheets", type=GSheetsConnection)
+# Spreadsheet CSV direct URLs
+SPREADSHEET_ID = "1zfRSA_5WJiKM_c7k66HUfHNxxXcFUWWdnV8bF5p4JQY"
+INVENTORY_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=Inventory"
+LOGS_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=Logs"
 
 def load_permanent_data():
-    df = conn.read(worksheet="Inventory", ttl=0)
-    df['Part Number'] = df['Part Number'].astype(str)
-    if 'Min Qty' not in df.columns:
-        df['Min Qty'] = 0
-    return df
+    try:
+        df = pd.read_csv(INVENTORY_URL)
+        df['Part Number'] = df['Part Number'].astype(str)
+        if 'Min Qty' not in df.columns:
+            df['Min Qty'] = 0
+        return df
+    except Exception:
+        return pd.DataFrame(columns=['Part Number', 'Part Name', 'Qty on Hand', 'Location', 'Project', 'Min Qty'])
 
 def save_permanent_data(df):
-    conn.update(worksheet="Inventory", data=df)
+    if "inventory_db" not in st.session_state:
+        st.session_state["inventory_db"] = df
     st.cache_data.clear()
 
 def load_logs():
-    df = conn.read(worksheet="Logs", ttl=0)
-    df['Part Number'] = df['Part Number'].astype(str)
-    return df
+    try:
+        df = pd.read_csv(LOGS_URL)
+        df['Part Number'] = df['Part Number'].astype(str)
+        return df
+    except Exception:
+        return pd.DataFrame(columns=['Timestamp', 'Action', 'Part Number', 'Part Name', 'Details'])
 
 def save_logs(df):
-    conn.update(worksheet="Logs", data=df)
+    if "logs_db" not in st.session_state:
+        st.session_state["logs_db"] = df
     st.cache_data.clear()
 
 def log_event(action, part_num, part_name, details):
@@ -99,7 +97,11 @@ if not st.session_state["authenticated"]:
     st.stop()
 
 st.title("Panel Shop Barcode Inventory System")
-df = load_permanent_data()
+
+if "inventory_db" not in st.session_state:
+    st.session_state["inventory_db"] = load_permanent_data()
+
+df = st.session_state["inventory_db"]
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "Scan Search", 
@@ -183,8 +185,7 @@ with tab2:
                             "Part Number": new_num, "Part Name": new_name, "Qty on Hand": new_qty, 
                             "Location": formatted_loc, "Project": new_proj, "Min Qty": new_min_qty
                         }])
-                        df = pd.concat([df, new_row], ignore_index=True)
-                        save_permanent_data(df)
+                        st.session_state["inventory_db"] = pd.concat([df, new_row], ignore_index=True)
                         log_event("Added", new_num, new_name, f"Registered new item. Initial Qty: {new_qty} at {formatted_loc}. Min Qty Limit set to {new_min_qty}")
                         st.success("Successfully registered item permanently!")
                         st.rerun()
@@ -199,7 +200,7 @@ with tab2:
             if st.button("Confirm Addition"):
                 df.at[row_idx, 'Qty on Hand'] += amt_to_add
                 df.at[row_idx, 'Min Qty'] = new_min_qty
-                save_permanent_data(df)
+                st.session_state["inventory_db"] = df
                 log_event("Added", df.at[row_idx, 'Part Number'], df.at[row_idx, 'Part Name'], f"Added {amt_to_add} units. New Total: {df.at[row_idx, 'Qty on Hand']}. Min Qty adjusted to {new_min_qty}")
                 st.success("Stock updated permanently!")
                 st.rerun()
@@ -230,12 +231,13 @@ with tab3:
                 new_stock = current_stock - amt_to_sub
                 
                 if new_stock <= 0:
-                    df = df.drop(row_idx).reset_index(drop=True)
+                    st.session_state["inventory_db"] = df.drop(row_idx).reset_index(drop=True)
                     log_event("Removed", part_num, part_name, f"Removed {amt_to_sub} units. Stock hit 0, item deleted.")
                     st.toast(f"🚨 ALERT: {part_name} has hit 0 and is completely out of stock!", icon="🚨")
                     st.success("Item quantity dropped to 0 and has been removed from permanent inventory!")
                 else:
                     df.at[row_idx, 'Qty on Hand'] = new_stock
+                    st.session_state["inventory_db"] = df
                     log_event("Removed", part_num, part_name, f"Removed {amt_to_sub} units. Remaining: {new_stock}")
                     
                     if new_stock <= min_threshold and min_threshold > 0:
@@ -244,7 +246,6 @@ with tab3:
                     else:
                         st.success(f"Stock removed! Remaining units: {new_stock}")
                 
-                save_permanent_data(df)
                 st.rerun()
 
 with tab4:
@@ -275,7 +276,7 @@ with tab4:
                     part_name = df.at[row_idx, 'Part Name']
                     
                     df.at[row_idx, 'Location'] = formatted_loc
-                    save_permanent_data(df)
+                    st.session_state["inventory_db"] = df
                     log_event("Moved", part_num, part_name, f"Moved from {old_loc} to {formatted_loc}")
                     st.success(f"Location permanently updated to [{formatted_loc}]!")
                     st.rerun()
