@@ -2,4 +2,4 @@ streamlit
 pandas
 streamlit-gsheets
 python-barcode
-pillow
+Pillow
