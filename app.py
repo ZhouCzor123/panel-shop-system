@@ -10,8 +10,8 @@ import json
 
 PASSWORD = "PanelShopSecure2026"
 
-# Directly define spreadsheet ID to eliminate URL formatting issues
-SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1zfRSA_5WJiKM_c7k66HUfHNxxXcFUWWdnV8bF5p4JQY/edit"
+# Pure Spreadsheet ID extracted from your Google Sheet URL
+SPREADSHEET_ID = "1zfRSA_5WJiKM_c7k66HUfHNxxXcFUWWdnV8bF5p4JQY"
 
 # Hardcoded service account credentials
 service_account_info = {
@@ -37,23 +37,23 @@ os.environ["GCP_SERVICE_ACCOUNT_INFO"] = json.dumps(service_account_info)
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_permanent_data():
-    df = conn.read(spreadsheet=SPREADSHEET_URL, worksheet="Inventory", ttl=0)
+    df = conn.read(spreadsheet=SPREADSHEET_ID, worksheet="Inventory", ttl=0)
     df['Part Number'] = df['Part Number'].astype(str)
     if 'Min Qty' not in df.columns:
         df['Min Qty'] = 0
     return df
 
 def save_permanent_data(df):
-    conn.update(spreadsheet=SPREADSHEET_URL, worksheet="Inventory", data=df)
+    conn.update(spreadsheet=SPREADSHEET_ID, worksheet="Inventory", data=df)
     st.cache_data.clear()
 
 def load_logs():
-    df = conn.read(spreadsheet=SPREADSHEET_URL, worksheet="Logs", ttl=0)
+    df = conn.read(spreadsheet=SPREADSHEET_ID, worksheet="Logs", ttl=0)
     df['Part Number'] = df['Part Number'].astype(str)
     return df
 
 def save_logs(df):
-    conn.update(spreadsheet=SPREADSHEET_URL, worksheet="Logs", data=df)
+    conn.update(spreadsheet=SPREADSHEET_ID, worksheet="Logs", data=df)
     st.cache_data.clear()
 
 def log_event(action, part_num, part_name, details):
