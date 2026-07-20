@@ -8,7 +8,18 @@ import re
 
 PASSWORD = "PanelShopSecure2026"
 
-# Connect to Google Sheets cleanly without needing picky PEM key strings
+# Fix escaped newline characters in Streamlit secrets before GSheetsConnection initializes
+try:
+    if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
+        secrets_dict = dict(st.secrets["connections"]["gsheets"])
+        if "private_key" in secrets_dict:
+            # Converts literal '\n' characters into real line break bytes
+            secrets_dict["private_key"] = secrets_dict["private_key"].replace("\\n", "\n")
+            st.secrets._secrets["connections"]["gsheets"] = secrets_dict
+except Exception:
+    pass
+
+# Connect to Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_permanent_data():
