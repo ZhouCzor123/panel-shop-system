@@ -8,7 +8,7 @@ import re
 
 PASSWORD = "PanelShopSecure2026"
 
-# Connect to Google Sheets natively using standard Streamlit Secrets
+# Connect to Google Sheets cleanly without needing picky PEM key strings
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_permanent_data():
