@@ -1,19 +1,17 @@
 import streamlit as st
 import pandas as pd
-from streamlit_gsheets import GSheetsConnection
 from barcode import Code128
 from barcode.writer import ImageWriter
 from io import BytesIO
 import re
-import os
-import json
+import gspread
 
 PASSWORD = "PanelShopSecure2026"
 
-# Pure Spreadsheet ID extracted from your Google Sheet URL
+# Spreadsheet key identifier
 SPREADSHEET_ID = "1zfRSA_5WJiKM_c7k66HUfHNxxXcFUWWdnV8bF5p4JQY"
 
-# Hardcoded service account credentials
+# Service account credentials configuration
 service_account_info = {
     "type": "service_account",
     "project_id": "aqueous-glyph-502919-b1",
@@ -27,34 +25,42 @@ service_account_info = {
     "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/panel-shop-editor%40aqueous-glyph-502919-b1.iam.gserviceaccount.com"
 }
 
-# Ensure newlines in private key are correctly unescaped
+# Fix line breaks in key string
 service_account_info["private_key"] = service_account_info["private_key"].replace("\\n", "\n")
 
-# Inject directly into environment variables
-os.environ["GCP_SERVICE_ACCOUNT_INFO"] = json.dumps(service_account_info)
-
-# Initialize GSheets connection
-conn = st.connection("gsheets", type=GSheetsConnection)
+# Authorize gspread directly
+gc = gspread.service_account_from_dict(service_account_info)
+sh = gc.open_by_key(SPREADSHEET_ID)
 
 def load_permanent_data():
-    df = conn.read(spreadsheet=SPREADSHEET_ID, worksheet="Inventory", ttl=0)
+    worksheet = sh.worksheet("Inventory")
+    records = worksheet.get_all_records()
+    df = pd.DataFrame(records)
+    if df.empty:
+        df = pd.DataFrame(columns=['Part Number', 'Part Name', 'Qty on Hand', 'Location', 'Project', 'Min Qty'])
     df['Part Number'] = df['Part Number'].astype(str)
     if 'Min Qty' not in df.columns:
         df['Min Qty'] = 0
     return df
 
 def save_permanent_data(df):
-    conn.update(spreadsheet=SPREADSHEET_ID, worksheet="Inventory", data=df)
-    st.cache_data.clear()
+    worksheet = sh.worksheet("Inventory")
+    worksheet.clear()
+    worksheet.update([df.columns.values.tolist()] + df.values.tolist())
 
 def load_logs():
-    df = conn.read(spreadsheet=SPREADSHEET_ID, worksheet="Logs", ttl=0)
+    worksheet = sh.worksheet("Logs")
+    records = worksheet.get_all_records()
+    df = pd.DataFrame(records)
+    if df.empty:
+        df = pd.DataFrame(columns=['Timestamp', 'Action', 'Part Number', 'Part Name', 'Details'])
     df['Part Number'] = df['Part Number'].astype(str)
     return df
 
 def save_logs(df):
-    conn.update(spreadsheet=SPREADSHEET_ID, worksheet="Logs", data=df)
-    st.cache_data.clear()
+    worksheet = sh.worksheet("Logs")
+    worksheet.clear()
+    worksheet.update([df.columns.values.tolist()] + df.values.tolist())
 
 def log_event(action, part_num, part_name, details):
     log_df = load_logs()
@@ -311,7 +317,7 @@ st.sidebar.header("Live Inventory Grid View")
 styled_df = df.style.apply(highlight_shortages, axis=1)
 st.sidebar.dataframe(styled_df, use_container_width=True)
 
-# --- Your Permanent Legacy Footer ---
+# --- Permanent Legacy Footer ---
 st.sidebar.markdown("---")
 st.sidebar.markdown(
     """
