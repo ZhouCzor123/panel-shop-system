@@ -10,6 +10,9 @@ import json
 
 PASSWORD = "PanelShopSecure2026"
 
+# Directly define spreadsheet ID to eliminate URL formatting issues
+SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1zfRSA_5WJiKM_c7k66HUfHNxxXcFUWWdnV8bF5p4JQY/edit"
+
 # Hardcoded service account credentials
 service_account_info = {
     "type": "service_account",
@@ -24,33 +27,33 @@ service_account_info = {
     "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/panel-shop-editor%40aqueous-glyph-502919-b1.iam.gserviceaccount.com"
 }
 
-# Fix missing newline characters in the private key text string
+# Ensure newlines in private key are correctly unescaped
 service_account_info["private_key"] = service_account_info["private_key"].replace("\\n", "\n")
 
-# Map variables directly to environment variables for the internal gsheets parser
+# Inject directly into environment variables
 os.environ["GCP_SERVICE_ACCOUNT_INFO"] = json.dumps(service_account_info)
 
-# Initialize standard connection tracking from the newly set environment variables
+# Initialize GSheets connection
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_permanent_data():
-    df = conn.read(spreadsheet=st.secrets.get("spreadsheet", ""), worksheet="Inventory", ttl=0)
+    df = conn.read(spreadsheet=SPREADSHEET_URL, worksheet="Inventory", ttl=0)
     df['Part Number'] = df['Part Number'].astype(str)
     if 'Min Qty' not in df.columns:
         df['Min Qty'] = 0
     return df
 
 def save_permanent_data(df):
-    conn.update(spreadsheet=st.secrets.get("spreadsheet", ""), worksheet="Inventory", data=df)
+    conn.update(spreadsheet=SPREADSHEET_URL, worksheet="Inventory", data=df)
     st.cache_data.clear()
 
 def load_logs():
-    df = conn.read(spreadsheet=st.secrets.get("spreadsheet", ""), worksheet="Logs", ttl=0)
+    df = conn.read(spreadsheet=SPREADSHEET_URL, worksheet="Logs", ttl=0)
     df['Part Number'] = df['Part Number'].astype(str)
     return df
 
 def save_logs(df):
-    conn.update(spreadsheet=st.secrets.get("spreadsheet", ""), worksheet="Logs", data=df)
+    conn.update(spreadsheet=SPREADSHEET_URL, worksheet="Logs", data=df)
     st.cache_data.clear()
 
 def log_event(action, part_num, part_name, details):
@@ -314,8 +317,8 @@ st.sidebar.markdown(
     """
     <div style='text-align: center; color: gray; font-size: 0.8em;'>
         <b>Panel Shop Inventory System v2.0</b><br>
-        Designed & Built by <b>Zhou Czornoba</b><br>
-        Co-op Term May-August 2026
+        Designed & Built by <b>Your Name</b><br>
+        Co-op Term 2026
     </div>
     """, 
     unsafe_allow_html=True
