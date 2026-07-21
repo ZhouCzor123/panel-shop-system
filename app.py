@@ -31,9 +31,15 @@ def load_permanent_data():
 
 def save_permanent_data(df):
     try:
-        supabase.table("Inventory").delete().neq("Part Number", "___DUMMY___").execute()
-        data_to_insert = df.to_dict(orient="records")
+        # Convert Pandas NaNs to clean defaults so JSON serialization succeeds
+        clean_df = df.copy()
+        clean_df['Qty on Hand'] = clean_df['Qty on Hand'].fillna(0).astype(int)
+        clean_df['Min Qty'] = clean_df['Min Qty'].fillna(0).astype(int)
+        clean_df = clean_df.fillna("")
+        
+        data_to_insert = clean_df.to_dict(orient="records")
         if data_to_insert:
+            supabase.table("Inventory").delete().neq("Part Number", "___DUMMY___").execute()
             supabase.table("Inventory").insert(data_to_insert).execute()
         st.cache_data.clear()
     except Exception as e:
@@ -55,9 +61,10 @@ def load_logs():
 
 def save_logs(df):
     try:
-        supabase.table("Logs").delete().neq("Action", "___DUMMY___").execute()
-        data_to_insert = df.to_dict(orient="records")
+        clean_df = df.copy().fillna("")
+        data_to_insert = clean_df.to_dict(orient="records")
         if data_to_insert:
+            supabase.table("Logs").delete().neq("Action", "___DUMMY___").execute()
             supabase.table("Logs").insert(data_to_insert).execute()
         st.cache_data.clear()
     except Exception as e:
@@ -324,7 +331,7 @@ st.sidebar.markdown(
     """
     <div style='text-align: center; color: gray; font-size: 0.8em;'>
         <b>Panel Shop Inventory System v2.0</b><br>
-        Designed & Built by <b>Zhou Lung Czornoba</b><br>
+        Designed & Built by <b>Zhou Czornoba</b><br>
         Co-op Term May-August 2026
     </div>
     """, 
