@@ -324,8 +324,8 @@ st.sidebar.markdown(
     """
     <div style='text-align: center; color: gray; font-size: 0.8em;'>
         <b>Panel Shop Inventory System v2.0</b><br>
-        Designed & Built by <b>Your Name</b><br>
-        Co-op Term 2026
+        Designed & Built by <b>Zhou Lung Czornoba</b><br>
+        Co-op Term May-August 2026
     </div>
     """, 
     unsafe_allow_html=True
