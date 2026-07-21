@@ -157,13 +157,27 @@ with tab1:
             st.success(f"Found {len(results)} matching item(s):")
             for idx, row in results.iterrows():
                 with st.container():
-                    col1, col2, col3, col4, col5, col6 = st.columns(6)
-                    col1.metric("Part Number", str(row['Part Number']))
-                    col2.metric("Part Name", str(row['Part Name']))
-                    col3.metric("Quantity", int(row['Qty on Hand']))
-                    col4.metric("Location", f"[{row['Location']}]")
-                    col5.metric("Project Name", str(row['Project']))
-                    col6.metric("Min Qty Alert Level", int(row['Min Qty']) if pd.notna(row['Min Qty']) else 0)
+                    # Custom weighted columns to give Part Number and Name plenty of room
+                    col1, col2, col3, col4, col5, col6 = st.columns([2, 3, 1.2, 1.2, 1.5, 1.5])
+                    
+                    with col1:
+                        st.caption("Part Number")
+                        st.markdown(f"### `{row['Part Number']}`")
+                    with col2:
+                        st.caption("Part Name")
+                        st.markdown(f"### {row['Part Name']}")
+                    with col3:
+                        st.caption("Quantity")
+                        st.markdown(f"### {int(row['Qty on Hand'])}")
+                    with col4:
+                        st.caption("Location")
+                        st.markdown(f"### [{row['Location']}]")
+                    with col5:
+                        st.caption("Project Name")
+                        st.markdown(f"### {row['Project']}")
+                    with col6:
+                        st.caption("Min Qty Alert Level")
+                        st.markdown(f"### {int(row['Min Qty']) if pd.notna(row['Min Qty']) else 0}")
                     
                     barcode_img = generate_barcode_image(str(row['Part Number']))
                     if barcode_img:
