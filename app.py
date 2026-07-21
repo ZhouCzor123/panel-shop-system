@@ -5,6 +5,7 @@ from barcode import Code128
 from barcode.writer import ImageWriter
 from io import BytesIO
 import re
+import pytz
 
 PASSWORD = "PanelShopSecure2026"
 
@@ -72,8 +73,13 @@ def save_logs(df):
 
 def log_event(action, part_num, part_name, details):
     log_df = load_logs()
+    
+    # Stamp using local Eastern Time
+    eastern_tz = pytz.timezone('America/Toronto')
+    current_time = pd.Timestamp.now(tz=eastern_tz).strftime("%Y-%m-%d %H:%M:%S")
+    
     new_log = pd.DataFrame([{
-        'Timestamp': pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
+        'Timestamp': current_time,
         'Action': action,
         'Part Number': str(part_num),
         'Part Name': str(part_name),
