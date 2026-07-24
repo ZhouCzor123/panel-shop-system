@@ -90,7 +90,8 @@ def log_event(action, part_num, part_name, details):
 
 def is_valid_location(loc_string):
     clean_loc = loc_string.strip().upper()
-    pattern = r"^[A-G][1-3]$"
+    # Expanded shelf limit from 1-3 to 1-4 (Allows C4, D4, E4, etc.)
+    pattern = r"^[A-G][1-4]$"
     return bool(re.match(pattern, clean_loc)), clean_loc
 
 def generate_barcode_image(part_number):
@@ -157,7 +158,6 @@ with tab1:
             st.success(f"Found {len(results)} matching item(s):")
             for idx, row in results.iterrows():
                 with st.container():
-                    # Custom weighted columns to give Part Number and Name plenty of room
                     col1, col2, col3, col4, col5, col6 = st.columns([2, 3, 1.2, 1.2, 1.5, 1.5])
                     
                     with col1:
@@ -208,15 +208,15 @@ with tab2:
             st.info("Brand new item detected! Fill out the fields below to register it:")
             new_num = st.text_input("Part Number (This will become the barcode text):")
             new_name = st.text_input("Part Name:")
-            new_qty = st.number_input("Initial Quantity:", min_value=1, step=1)
-            new_loc = st.text_input("Storage Location (Allowed: A1-A3 up to G1-G3):")
+            new_qty = st.number_input("Initial Quantity:", min_value=1, step=10, value=10)
+            new_loc = st.text_input("Storage Location (Allowed: A1-A4 up to G1-G4):")
             new_proj = st.text_input("Project Name:")
-            new_min_qty = st.number_input("Minimum Quantity Alert Threshold (Optional, set 0 for None):", min_value=0, step=1, value=0)
+            new_min_qty = st.number_input("Minimum Quantity Alert Threshold (Optional, set 0 for None):", min_value=0, step=10, value=0)
             
             if st.button("Save Brand New Item"):
                 valid, formatted_loc = is_valid_location(new_loc)
                 if not valid:
-                    st.error("Invalid Location! Format must be Rack A-G and Shelf 1-3. Example: F2")
+                    st.error("Invalid Location! Format must be Rack A-G and Shelf 1-4. Example: E4")
                 else:
                     duplicate_check = df[
                         (df['Part Number'] == new_num) & 
@@ -241,8 +241,9 @@ with tab2:
             choice = st.selectbox("Select the correct item row to add stock to:", options, key="add_select")
             row_idx = results.index[options.index(choice)]
             
-            amt_to_add = st.number_input("How many units are you adding?", min_value=1, step=1, key="add_amt")
-            new_min_qty = st.number_input(f"Update Minimum Quantity Alert Level (Current: {df.at[row_idx, 'Min Qty']}):", min_value=0, step=1, value=int(df.at[row_idx, 'Min Qty']))
+            # Increments by 10
+            amt_to_add = st.number_input("How many units are you adding?", min_value=1, step=10, value=10, key="add_amt")
+            new_min_qty = st.number_input(f"Update Minimum Quantity Alert Level (Current: {df.at[row_idx, 'Min Qty']}):", min_value=0, step=10, value=int(df.at[row_idx, 'Min Qty']))
             
             if st.button("Confirm Addition"):
                 df.at[row_idx, 'Qty on Hand'] += amt_to_add
@@ -269,7 +270,8 @@ with tab3:
             choice = st.selectbox("Select the item row you are pulling from:", options, key="take_select")
             row_idx = results.index[options.index(choice)]
             
-            amt_to_sub = st.number_input("How many units are you taking for assembly?", min_value=1, step=1, key="take_amt")
+            # Increments by 10
+            amt_to_sub = st.number_input("How many units are you taking for assembly?", min_value=1, step=10, value=10, key="take_amt")
             if st.button("Confirm Removal"):
                 current_stock = df.at[row_idx, 'Qty on Hand']
                 part_num = df.at[row_idx, 'Part Number']
@@ -312,11 +314,11 @@ with tab4:
             choice = st.selectbox("Select the item listing you want to move:", options, key="loc_select")
             row_idx = results.index[options.index(choice)]
             
-            new_location = st.text_input(f"Enter new location code (Allowed: A1-A3 up to G1-G3):")
+            new_location = st.text_input(f"Enter new location code (Allowed: A1-A4 up to G1-G4):")
             if st.button("Update Location"):
                 valid, formatted_loc = is_valid_location(new_location)
                 if not valid:
-                    st.error("Invalid Location! Must be a letter from A-G and a number from 1-3. Example: F1")
+                    st.error("Invalid Location! Must be a letter from A-G and a number from 1-4. Example: E4")
                 else:
                     old_loc = df.at[row_idx, 'Location']
                     part_num = df.at[row_idx, 'Part Number']
@@ -352,7 +354,7 @@ st.sidebar.markdown(
     <div style='text-align: center; color: gray; font-size: 0.8em;'>
         <b>Panel Shop Inventory System v2.0</b><br>
         Designed & Built by <b>Zhou Czornoba</b><br>
-        Co-op Term May-August 2026
+        Co-op May-August Term 2026
     </div>
     """, 
     unsafe_allow_html=True
