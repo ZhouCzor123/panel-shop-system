@@ -289,12 +289,12 @@ with tab3:
             new_num = st.text_input("Part Number (This will become the barcode text):")
             new_name = st.text_input("Part Name:")
             
-            # Dynamic Dropdown for Part Type
+            # Existing types first, with '+ Add New Part Type' pinned to the bottom
             known_types = sorted([t for t in df['Part Type'].dropna().astype(str).unique() if t.strip()])
-            type_options = known_types + ["+ Add New Part Type..."] if known_types else ["+ Add New Part Type..."]
+            type_options = known_types + ["+ Add New Part Type"]
             
             selected_type_opt = st.selectbox("Part Type", options=type_options, key="new_part_type_select")
-            if selected_type_opt == "+ Add New Part Type...":
+            if selected_type_opt == "+ Add New Part Type":
                 new_type = st.text_input("Enter New Part Type Name:", key="new_part_type_custom").strip()
             else:
                 new_type = selected_type_opt
@@ -435,19 +435,18 @@ with tab5:
             col_a1, col_a2 = st.columns(2)
             updated_project = col_a1.text_input("Assigned Project Name:", value=str(df.at[row_idx, 'Project']))
             
-            # Dynamic Dropdown for Part Type in Alter Tab
             current_type = str(df.at[row_idx, 'Part Type']) if pd.notna(df.at[row_idx, 'Part Type']) else ""
             known_types = sorted([t for t in df['Part Type'].dropna().astype(str).unique() if t.strip()])
             
             if current_type and current_type not in known_types:
                 known_types.append(current_type)
             
-            type_options = known_types + ["+ Add New Part Type..."] if known_types else ["+ Add New Part Type..."]
+            type_options = known_types + ["+ Add New Part Type"]
             
             default_index = type_options.index(current_type) if current_type in type_options else 0
             selected_type_opt = col_a2.selectbox("Part Type", options=type_options, index=default_index, key="alter_part_type_select")
             
-            if selected_type_opt == "+ Add New Part Type...":
+            if selected_type_opt == "+ Add New Part Type":
                 updated_type = col_a2.text_input("Enter New Part Type Name:", key="alter_part_type_custom").strip()
             else:
                 updated_type = selected_type_opt
