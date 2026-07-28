@@ -261,7 +261,7 @@ with tab3:
     
     col_f1, col_f2 = st.columns(2)
     existing_projects = ["All Projects"] + sorted(list(set(df['Project'].dropna().astype(str).unique())))
-    existing_types = ["All Part Types"] + sorted(list(set(df['Part Type'].dropna().astype(str).unique())))
+    existing_types = ["All Part Types"] + sorted([t for t in df['Part Type'].dropna().astype(str).unique() if t.strip()])
     
     selected_proj_add = col_f1.selectbox("Filter by Project:", existing_projects, key="add_filter_proj")
     selected_type_add = col_f2.selectbox("Filter by Part Type:", existing_types, key="add_filter_type")
@@ -288,7 +288,17 @@ with tab3:
             st.info("Brand new item detected! Fill out the fields below to register it:")
             new_num = st.text_input("Part Number (This will become the barcode text):")
             new_name = st.text_input("Part Name:")
-            new_type = st.text_input("Part Type (Optional, e.g. PLC, Terminal, Relay):")
+            
+            # Dynamic Dropdown for Part Type
+            known_types = sorted([t for t in df['Part Type'].dropna().astype(str).unique() if t.strip()])
+            type_options = known_types + ["+ Add New Part Type..."] if known_types else ["+ Add New Part Type..."]
+            
+            selected_type_opt = st.selectbox("Part Type", options=type_options, key="new_part_type_select")
+            if selected_type_opt == "+ Add New Part Type...":
+                new_type = st.text_input("Enter New Part Type Name:", key="new_part_type_custom").strip()
+            else:
+                new_type = selected_type_opt
+                
             new_qty = st.number_input("Initial Quantity:", min_value=1, step=10, value=10)
             new_loc = st.text_input("Storage Location (Allowed: A1-A3, B1-B3, C1-C4, D1-D4, E1-E4, F1-F3, G1-G3):")
             new_proj = st.text_input("Project Name:")
@@ -296,7 +306,9 @@ with tab3:
             
             if st.button("Save Brand New Item"):
                 valid, formatted_loc = is_valid_location(new_loc)
-                if not valid:
+                if not new_type:
+                    st.error("Part Type is required and cannot be left blank.")
+                elif not valid:
                     st.error("Invalid Location! Format must be Rack A-G (Shelves 1-3, or 1-4 for C, D, E). Examples: C4, F2")
                 else:
                     duplicate_check = df[
@@ -340,7 +352,7 @@ with tab4:
     
     col_f1, col_f2 = st.columns(2)
     existing_projects = ["All Projects"] + sorted(list(set(df['Project'].dropna().astype(str).unique())))
-    existing_types = ["All Part Types"] + sorted(list(set(df['Part Type'].dropna().astype(str).unique())))
+    existing_types = ["All Part Types"] + sorted([t for t in df['Part Type'].dropna().astype(str).unique() if t.strip()])
     
     selected_proj_take = col_f1.selectbox("Filter by Project:", existing_projects, key="take_filter_proj")
     selected_type_take = col_f2.selectbox("Filter by Part Type:", existing_types, key="take_filter_type")
@@ -422,17 +434,36 @@ with tab5:
             
             col_a1, col_a2 = st.columns(2)
             updated_project = col_a1.text_input("Assigned Project Name:", value=str(df.at[row_idx, 'Project']))
-            updated_type = col_a2.text_input("Part Type (e.g. PLC, Relay, Terminal):", value=str(df.at[row_idx, 'Part Type']) if pd.notna(df.at[row_idx, 'Part Type']) else "")
+            
+            # Dynamic Dropdown for Part Type in Alter Tab
+            current_type = str(df.at[row_idx, 'Part Type']) if pd.notna(df.at[row_idx, 'Part Type']) else ""
+            known_types = sorted([t for t in df['Part Type'].dropna().astype(str).unique() if t.strip()])
+            
+            if current_type and current_type not in known_types:
+                known_types.append(current_type)
+            
+            type_options = known_types + ["+ Add New Part Type..."] if known_types else ["+ Add New Part Type..."]
+            
+            default_index = type_options.index(current_type) if current_type in type_options else 0
+            selected_type_opt = col_a2.selectbox("Part Type", options=type_options, index=default_index, key="alter_part_type_select")
+            
+            if selected_type_opt == "+ Add New Part Type...":
+                updated_type = col_a2.text_input("Enter New Part Type Name:", key="alter_part_type_custom").strip()
+            else:
+                updated_type = selected_type_opt
             
             if st.button("Save Altered Attributes"):
-                df.at[row_idx, 'Part Name'] = updated_name
-                df.at[row_idx, 'Project'] = updated_project
-                df.at[row_idx, 'Part Type'] = updated_type
-                
-                save_permanent_data(df)
-                log_event("Altered", df.at[row_idx, 'Part Number'], updated_name, f"Updated Name ('{updated_name}'), Project ('{updated_project}'), Type ('{updated_type}')", project=updated_project, part_type=updated_type)
-                st.success("Part attributes successfully updated in database!")
-                st.rerun()
+                if not updated_type:
+                    st.error("Part Type is required and cannot be left blank.")
+                else:
+                    df.at[row_idx, 'Part Name'] = updated_name
+                    df.at[row_idx, 'Project'] = updated_project
+                    df.at[row_idx, 'Part Type'] = updated_type
+                    
+                    save_permanent_data(df)
+                    log_event("Altered", df.at[row_idx, 'Part Number'], updated_name, f"Updated Name ('{updated_name}'), Project ('{updated_project}'), Type ('{updated_type}')", project=updated_project, part_type=updated_type)
+                    st.success("Part attributes successfully updated in database!")
+                    st.rerun()
 
 # --- TAB 6: CHANGE LOCATION ---
 with tab6:
@@ -481,7 +512,7 @@ with tab7:
         
         action_filter = col_l1.selectbox("Filter by Action:", ["All", "Added", "Removed", "Moved", "Altered"])
         log_proj_filter = col_l2.selectbox("Filter by Project:", ["All Projects"] + sorted(list(set(log_df['Project'].dropna().astype(str).unique()))))
-        log_type_filter = col_l3.selectbox("Filter by Part Type:", ["All Part Types"] + sorted(list(set(log_df['Part Type'].dropna().astype(str).unique()))))
+        log_type_filter = col_l3.selectbox("Filter by Part Type:", ["All Part Types"] + sorted([t for t in log_df['Part Type'].dropna().astype(str).unique() if t.strip()]))
         
         filtered_logs = log_df.copy()
         if action_filter != "All":
@@ -503,8 +534,8 @@ st.sidebar.markdown(
     """
     <div style='text-align: center; color: gray; font-size: 0.8em;'>
         <b>Panel Shop Inventory System v2.0</b><br>
-        Designed & Built by <b>Zhou Czornoba</b><br>
-        Co-op Term May-August 2026
+        Designed & Built by <b>Zhou Czor</b><br>
+        Co-op Term 2026
     </div>
     """, 
     unsafe_allow_html=True
