@@ -140,14 +140,13 @@ if not st.session_state["authenticated"]:
 st.title("Panel Shop Inventory System")
 df = load_permanent_data()
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "Scan Search", 
     "Location Search",
     "Add Inventory", 
     "Take Inventory", 
     "Alter Part",
     "Change Part Location",
-    "Clear Project",
     "Log History"
 ])
 
@@ -471,35 +470,8 @@ with tab6:
                     st.success(f"Location permanently updated to [{formatted_loc}]!")
                     st.rerun()
 
-# --- TAB 7: CLEAR PROJECT ---
+# --- TAB 7: LOG HISTORY WITH FILTERS ---
 with tab7:
-    st.header("Clear / Wipe Finished Project")
-    st.warning("⚠️ WARNING: This will permanently wipe ALL parts registered under the chosen project from the database.")
-    
-    all_projects = sorted(list(set(df['Project'].dropna().astype(str).unique())))
-    if not all_projects:
-        st.info("No projects currently found in database.")
-    else:
-        proj_to_wipe = st.selectbox("Select Completed Project to Clear:", all_projects)
-        project_items = df[df['Project'] == proj_to_wipe]
-        
-        st.subheader(f"Items to be removed ({len(project_items)} items):")
-        st.dataframe(project_items[['Part Number', 'Part Name', 'Qty on Hand', 'Location']], use_container_width=True)
-        
-        confirm_check = st.checkbox(f"I confirm that Project '{proj_to_wipe}' is complete and I want to delete all associated parts permanently.")
-        
-        if st.button("Wipe All Parts For This Project"):
-            if not confirm_check:
-                st.error("Please check the confirmation box above first.")
-            else:
-                df = df[df['Project'] != proj_to_wipe].reset_index(drop=True)
-                save_permanent_data(df)
-                log_event("Project Cleared", "N/A", f"Project {proj_to_wipe}", f"Wiped {len(project_items)} items from database after project completion.", project=proj_to_wipe)
-                st.success(f"Project '{proj_to_wipe}' and all its registered items have been permanently deleted!")
-                st.rerun()
-
-# --- TAB 8: LOG HISTORY WITH FILTERS ---
-with tab8:
     st.header("Activity Log History")
     log_df = load_logs()
     if log_df.empty:
@@ -507,7 +479,7 @@ with tab8:
     else:
         col_l1, col_l2, col_l3 = st.columns(3)
         
-        action_filter = col_l1.selectbox("Filter by Action:", ["All", "Added", "Removed", "Moved", "Altered", "Project Cleared"])
+        action_filter = col_l1.selectbox("Filter by Action:", ["All", "Added", "Removed", "Moved", "Altered"])
         log_proj_filter = col_l2.selectbox("Filter by Project:", ["All Projects"] + sorted(list(set(log_df['Project'].dropna().astype(str).unique()))))
         log_type_filter = col_l3.selectbox("Filter by Part Type:", ["All Part Types"] + sorted(list(set(log_df['Part Type'].dropna().astype(str).unique()))))
         
@@ -531,8 +503,8 @@ st.sidebar.markdown(
     """
     <div style='text-align: center; color: gray; font-size: 0.8em;'>
         <b>Panel Shop Inventory System v2.0</b><br>
-        Designed & Built by <b>Zhou Czor</b><br>
-        Co-op Term 2026
+        Designed & Built by <b>Zhou Czornoba</b><br>
+        Co-op Term May-August 2026
     </div>
     """, 
     unsafe_allow_html=True
