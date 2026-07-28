@@ -130,7 +130,6 @@ if not st.session_state["authenticated"]:
             st.error("Incorrect Password. Access Denied.")
     st.stop()
 
-# --- Updated Header Name ---
 st.title("Panel Shop Inventory System")
 df = load_permanent_data()
 
@@ -148,7 +147,6 @@ with tab1:
     search_query = st.text_input("Click here to SCAN a barcode, or TYPE a part name/number:", key="search_input").strip()
     
     if search_query:
-        # Strictly searches Part Number and Part Name
         results = df[
             (df['Part Number'].astype(str) == search_query) | 
             (df['Part Name'].str.contains(search_query, case=False, na=False))
@@ -195,11 +193,10 @@ with tab1:
             st.error(f"No parts match your search for '{search_query}'.")
 
 with tab2:
-    st.header("Search Database by Storage Location / Bin")
+    st.header("Search Database by Storage Location")
     loc_search_query = st.text_input("Enter Storage Location Code (e.g. C3, D4, F1):", key="loc_search_input").strip().upper()
     
     if loc_search_query:
-        # Strictly filters database by exact location match
         results = df[df['Location'].astype(str).str.upper() == loc_search_query]
         
         if not results.empty:
@@ -344,7 +341,7 @@ with tab4:
                 st.rerun()
 
 with tab5:
-    st.header("Move Parts to a New Location/Bin")
+    st.header("Move Parts to a New Location")
     loc_query = st.text_input("Scan or Type part to change its LOCATION:", key="loc_input").strip()
     
     if loc_query:
