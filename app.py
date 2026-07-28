@@ -146,12 +146,14 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 
 with tab1:
     st.header("Search Database")
-    search_query = st.text_input("Click here to SCAN a barcode, or TYPE a part name/number:", key="search_input").strip()
+    search_query = st.text_input("SCAN a barcode, or TYPE a part name, number, or LOCATION (e.g. C4):", key="search_input").strip()
     
     if search_query:
+        # Searches across Part Number, Part Name, AND Location code
         results = df[
             (df['Part Number'].astype(str) == search_query) | 
-            (df['Part Name'].str.contains(search_query, case=False, na=False))
+            (df['Part Name'].str.contains(search_query, case=False, na=False)) |
+            (df['Location'].str.contains(search_query, case=False, na=False))
         ]
         
         if not results.empty:
