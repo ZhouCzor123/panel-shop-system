@@ -19,19 +19,18 @@ def load_permanent_data():
         response = supabase.table("Inventory").select("*").execute()
         df = pd.DataFrame(response.data)
         if df.empty:
-            df = pd.DataFrame(columns=['Part Number', 'Part Name', 'Alias', 'Part Type', 'Qty on Hand', 'Location', 'Project', 'Min Qty'])
+            df = pd.DataFrame(columns=['Part Number', 'Part Name', 'Part Type', 'Qty on Hand', 'Location', 'Project', 'Min Qty'])
         else:
             if 'id' in df.columns:
                 df = df.drop(columns=['id'])
             df['Part Number'] = df['Part Number'].astype(str)
-            for col in ['Alias', 'Part Type']:
-                if col not in df.columns:
-                    df[col] = ""
+            if 'Part Type' not in df.columns:
+                df['Part Type'] = ""
             if 'Min Qty' not in df.columns:
                 df['Min Qty'] = 0
         return df
     except Exception:
-        return pd.DataFrame(columns=['Part Number', 'Part Name', 'Alias', 'Part Type', 'Qty on Hand', 'Location', 'Project', 'Min Qty'])
+        return pd.DataFrame(columns=['Part Number', 'Part Name', 'Part Type', 'Qty on Hand', 'Location', 'Project', 'Min Qty'])
 
 def save_permanent_data(df):
     try:
@@ -155,13 +154,12 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
 # --- TAB 1: SCAN SEARCH ---
 with tab1:
     st.header("Search Database by Part")
-    search_query = st.text_input("Click here to SCAN a barcode, or TYPE a part name, number, or alias:", key="search_input").strip()
+    search_query = st.text_input("Click here to SCAN a barcode, or TYPE a part name/number:", key="search_input").strip()
     
     if search_query:
         results = df[
             (df['Part Number'].astype(str) == search_query) | 
-            (df['Part Name'].str.contains(search_query, case=False, na=False)) |
-            (df['Alias'].str.contains(search_query, case=False, na=False))
+            (df['Part Name'].str.contains(search_query, case=False, na=False))
         ]
         
         if not results.empty:
@@ -176,8 +174,6 @@ with tab1:
                     with col2:
                         st.caption("Part Name")
                         st.markdown(f"### {row['Part Name']}")
-                        if row.get('Alias'):
-                            st.caption(f"Alias: *{row['Alias']}*")
                     with col3:
                         st.caption("Part Type")
                         st.markdown(f"**{row['Part Type'] if row.get('Part Type') else 'N/A'}**")
@@ -229,8 +225,6 @@ with tab2:
                     with col2:
                         st.caption("Part Name")
                         st.markdown(f"### {row['Part Name']}")
-                        if row.get('Alias'):
-                            st.caption(f"Alias: *{row['Alias']}*")
                     with col3:
                         st.caption("Part Type")
                         st.markdown(f"**{row['Part Type'] if row.get('Part Type') else 'N/A'}**")
@@ -266,7 +260,6 @@ with tab2:
 with tab3:
     st.header("Receive / Add Stock")
     
-    # Filter Controls
     col_f1, col_f2 = st.columns(2)
     existing_projects = ["All Projects"] + sorted(list(set(df['Project'].dropna().astype(str).unique())))
     existing_types = ["All Part Types"] + sorted(list(set(df['Part Type'].dropna().astype(str).unique())))
@@ -287,8 +280,7 @@ with tab3:
         if add_query:
             results = filtered_add[
                 (filtered_add['Part Number'].astype(str) == add_query) | 
-                (filtered_add['Part Name'].str.contains(add_query, case=False, na=False)) |
-                (filtered_add['Alias'].str.contains(add_query, case=False, na=False))
+                (filtered_add['Part Name'].str.contains(add_query, case=False, na=False))
             ]
         else:
             results = filtered_add
@@ -297,7 +289,6 @@ with tab3:
             st.info("Brand new item detected! Fill out the fields below to register it:")
             new_num = st.text_input("Part Number (This will become the barcode text):")
             new_name = st.text_input("Part Name:")
-            new_alias = st.text_input("Part Alias (Optional alternative name/description):")
             new_type = st.text_input("Part Type (Optional, e.g. PLC, Terminal, Relay):")
             new_qty = st.number_input("Initial Quantity:", min_value=1, step=10, value=10)
             new_loc = st.text_input("Storage Location (Allowed: A1-A3, B1-B3, C1-C4, D1-D4, E1-E4, F1-F3, G1-G3):")
@@ -319,7 +310,7 @@ with tab3:
                         st.error("This exact part is already registered at this location for this project.")
                     else:
                         new_row = pd.DataFrame([{
-                            "Part Number": new_num, "Part Name": new_name, "Alias": new_alias,
+                            "Part Number": new_num, "Part Name": new_name,
                             "Part Type": new_type, "Qty on Hand": new_qty, 
                             "Location": formatted_loc, "Project": new_proj, "Min Qty": new_min_qty
                         }])
@@ -329,7 +320,7 @@ with tab3:
                         st.success("Successfully registered item permanently!")
                         st.rerun()
         elif not results.empty:
-            options = [f"{row['Part Name']} ({row['Alias'] if row.get('Alias') else 'No Alias'}) | Type: {row['Part Type']} | Proj: {row['Project']} | Qty: {row['Qty on Hand']} | Loc: {row['Location']}" for idx, row in results.iterrows()]
+            options = [f"{row['Part Name']} | Type: {row['Part Type']} | Proj: {row['Project']} | Qty: {row['Qty on Hand']} | Loc: {row['Location']}" for idx, row in results.iterrows()]
             choice = st.selectbox("Select the correct item row to add stock to:", options, key="add_select")
             row_idx = results.index[options.index(choice)]
             
@@ -368,8 +359,7 @@ with tab4:
         if take_query:
             results = filtered_take[
                 (filtered_take['Part Number'].astype(str) == take_query) | 
-                (filtered_take['Part Name'].str.contains(take_query, case=False, na=False)) |
-                (filtered_take['Alias'].str.contains(take_query, case=False, na=False))
+                (filtered_take['Part Name'].str.contains(take_query, case=False, na=False))
             ]
         else:
             results = filtered_take
@@ -377,7 +367,7 @@ with tab4:
         if results.empty:
             st.error("No parts found matching selected filters or query.")
         else:
-            options = [f"{row['Part Name']} ({row['Alias'] if row.get('Alias') else 'No Alias'}) | Type: {row['Part Type']} | Proj: {row['Project']} | Qty: {row['Qty on Hand']} | Loc: {row['Location']}" for idx, row in results.iterrows()]
+            options = [f"{row['Part Name']} | Type: {row['Part Type']} | Proj: {row['Project']} | Qty: {row['Qty on Hand']} | Loc: {row['Location']}" for idx, row in results.iterrows()]
             choice = st.selectbox("Select the item row you are pulling from:", options, key="take_select")
             row_idx = results.index[options.index(choice)]
             
@@ -417,8 +407,7 @@ with tab5:
     if alter_query:
         results = df[
             (df['Part Number'].astype(str) == alter_query) | 
-            (df['Part Name'].str.contains(alter_query, case=False, na=False)) |
-            (df['Alias'].str.contains(alter_query, case=False, na=False))
+            (df['Part Name'].str.contains(alter_query, case=False, na=False))
         ]
         
         if results.empty:
@@ -430,23 +419,19 @@ with tab5:
             
             st.subheader(f"Editing Part: {df.at[row_idx, 'Part Number']}")
             
-            col_a1, col_a2 = st.columns(2)
-            updated_name = col_a1.text_input("Part Name:", value=str(df.at[row_idx, 'Part Name']))
-            updated_alias = col_a2.text_input("Part Alias (Optional secondary name):", value=str(df.at[row_idx, 'Alias']) if pd.notna(df.at[row_idx, 'Alias']) else "")
+            updated_name = st.text_input("Part Name:", value=str(df.at[row_idx, 'Part Name']))
             
-            col_a3, col_a4 = st.columns(2)
-            updated_project = col_a3.text_input("Assigned Project Name:", value=str(df.at[row_idx, 'Project']))
-            updated_type = col_a4.text_input("Part Type (e.g. PLC, Relay, Terminal):", value=str(df.at[row_idx, 'Part Type']) if pd.notna(df.at[row_idx, 'Part Type']) else "")
+            col_a1, col_a2 = st.columns(2)
+            updated_project = col_a1.text_input("Assigned Project Name:", value=str(df.at[row_idx, 'Project']))
+            updated_type = col_a2.text_input("Part Type (e.g. PLC, Relay, Terminal):", value=str(df.at[row_idx, 'Part Type']) if pd.notna(df.at[row_idx, 'Part Type']) else "")
             
             if st.button("Save Altered Attributes"):
-                old_name = df.at[row_idx, 'Part Name']
                 df.at[row_idx, 'Part Name'] = updated_name
-                df.at[row_idx, 'Alias'] = updated_alias
                 df.at[row_idx, 'Project'] = updated_project
                 df.at[row_idx, 'Part Type'] = updated_type
                 
                 save_permanent_data(df)
-                log_event("Altered", df.at[row_idx, 'Part Number'], updated_name, f"Updated Name, Alias ('{updated_alias}'), Project ('{updated_project}'), Type ('{updated_type}')", project=updated_project, part_type=updated_type)
+                log_event("Altered", df.at[row_idx, 'Part Number'], updated_name, f"Updated Name ('{updated_name}'), Project ('{updated_project}'), Type ('{updated_type}')", project=updated_project, part_type=updated_type)
                 st.success("Part attributes successfully updated in database!")
                 st.rerun()
 
@@ -458,8 +443,7 @@ with tab6:
     if loc_query:
         results = df[
             (df['Part Number'].astype(str) == loc_query) | 
-            (df['Part Name'].str.contains(loc_query, case=False, na=False)) |
-            (df['Alias'].str.contains(loc_query, case=False, na=False))
+            (df['Part Name'].str.contains(loc_query, case=False, na=False))
         ]
         
         if results.empty:
@@ -547,8 +531,8 @@ st.sidebar.markdown(
     """
     <div style='text-align: center; color: gray; font-size: 0.8em;'>
         <b>Panel Shop Inventory System v2.0</b><br>
-        Designed & Built by <b>Zhou Czornoba</b><br>
-        Co-op Term May-August 2026
+        Designed & Built by <b>Zhou Czor</b><br>
+        Co-op Term 2026
     </div>
     """, 
     unsafe_allow_html=True
