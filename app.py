@@ -153,12 +153,14 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
 # --- TAB 1: SCAN SEARCH ---
 with tab1:
     st.header("Search Database by Part")
-    search_query = st.text_input("Click here to SCAN a barcode, or TYPE a part name/number:", key="search_input").strip()
+    search_query = st.text_input("Click here to SCAN a barcode, or TYPE a part name, number, or part type:", key="search_input").strip()
     
     if search_query:
+        # Searches across Part Number, Part Name, AND Part Type
         results = df[
             (df['Part Number'].astype(str) == search_query) | 
-            (df['Part Name'].str.contains(search_query, case=False, na=False))
+            (df['Part Name'].str.contains(search_query, case=False, na=False)) |
+            (df['Part Type'].str.contains(search_query, case=False, na=False))
         ]
         
         if not results.empty:
@@ -289,7 +291,6 @@ with tab3:
             new_num = st.text_input("Part Number (This will become the barcode text):")
             new_name = st.text_input("Part Name:")
             
-            # Existing types first, with '+ Add New Part Type' pinned to the bottom
             known_types = sorted([t for t in df['Part Type'].dropna().astype(str).unique() if t.strip()])
             type_options = known_types + ["+ Add New Part Type"]
             
@@ -533,8 +534,8 @@ st.sidebar.markdown(
     """
     <div style='text-align: center; color: gray; font-size: 0.8em;'>
         <b>Panel Shop Inventory System v2.0</b><br>
-        Designed & Built by <b>Zhou Czor</b><br>
-        Co-op Term 2026
+        Designed & Built by <b>Zhou Czornoba</b><br>
+        Co-op Term May-August 2026
     </div>
     """, 
     unsafe_allow_html=True
