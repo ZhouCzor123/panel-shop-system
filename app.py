@@ -32,7 +32,6 @@ def load_permanent_data():
 
 def save_permanent_data(df):
     try:
-        # Convert Pandas NaNs to clean defaults so JSON serialization succeeds
         clean_df = df.copy()
         clean_df['Qty on Hand'] = clean_df['Qty on Hand'].fillna(0).astype(int)
         clean_df['Min Qty'] = clean_df['Min Qty'].fillna(0).astype(int)
@@ -74,7 +73,6 @@ def save_logs(df):
 def log_event(action, part_num, part_name, details):
     log_df = load_logs()
     
-    # Stamp using local Eastern Time
     eastern_tz = pytz.timezone('America/Toronto')
     current_time = pd.Timestamp.now(tz=eastern_tz).strftime("%Y-%m-%d %H:%M:%S")
     
@@ -90,7 +88,6 @@ def log_event(action, part_num, part_name, details):
 
 def is_valid_location(loc_string):
     clean_loc = loc_string.strip().upper()
-    # Allows C4, D4, E4 specifically, while keeping A, B, F, G capped at 1-3
     pattern = r"^([C-E][1-4]|[A-B][1-3]|[F-G][1-3])$"
     return bool(re.match(pattern, clean_loc)), clean_loc
 
@@ -114,7 +111,7 @@ def highlight_shortages(row):
     return [''] * len(row)
 
 st.set_page_config(
-    page_title="Panel Shop Inventory", 
+    page_title="Panel Shop Inventory System", 
     page_icon="BlackMcDonald_Logo.webp", 
     layout="wide"
 )
@@ -133,11 +130,13 @@ if not st.session_state["authenticated"]:
             st.error("Incorrect Password. Access Denied.")
     st.stop()
 
-st.title("Panel Shop Barcode Inventory System")
+# --- Updated Header Name ---
+st.title("Panel Shop Inventory System")
 df = load_permanent_data()
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "Scan Search", 
+    "Location Search",
     "Add Inventory", 
     "Take Inventory", 
     "Change Part Location",
@@ -145,15 +144,14 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 ])
 
 with tab1:
-    st.header("Search Database")
-    search_query = st.text_input("SCAN a barcode, or TYPE a part name, number, or LOCATION (e.g. C4):", key="search_input").strip()
+    st.header("Search Database by Part")
+    search_query = st.text_input("Click here to SCAN a barcode, or TYPE a part name/number:", key="search_input").strip()
     
     if search_query:
-        # Searches across Part Number, Part Name, AND Location code
+        # Strictly searches Part Number and Part Name
         results = df[
             (df['Part Number'].astype(str) == search_query) | 
-            (df['Part Name'].str.contains(search_query, case=False, na=False)) |
-            (df['Location'].str.contains(search_query, case=False, na=False))
+            (df['Part Name'].str.contains(search_query, case=False, na=False))
         ]
         
         if not results.empty:
@@ -197,6 +195,54 @@ with tab1:
             st.error(f"No parts match your search for '{search_query}'.")
 
 with tab2:
+    st.header("Search Database by Storage Location / Bin")
+    loc_search_query = st.text_input("Enter Storage Location Code (e.g. C3, D4, F1):", key="loc_search_input").strip().upper()
+    
+    if loc_search_query:
+        # Strictly filters database by exact location match
+        results = df[df['Location'].astype(str).str.upper() == loc_search_query]
+        
+        if not results.empty:
+            st.success(f"Found {len(results)} item(s) stored in location [{loc_search_query}]:")
+            for idx, row in results.iterrows():
+                with st.container():
+                    col1, col2, col3, col4, col5, col6 = st.columns([2, 3, 1.2, 1.2, 1.5, 1.5])
+                    
+                    with col1:
+                        st.caption("Part Number")
+                        st.markdown(f"### `{row['Part Number']}`")
+                    with col2:
+                        st.caption("Part Name")
+                        st.markdown(f"### {row['Part Name']}")
+                    with col3:
+                        st.caption("Quantity")
+                        st.markdown(f"### {int(row['Qty on Hand'])}")
+                    with col4:
+                        st.caption("Location")
+                        st.markdown(f"### [{row['Location']}]")
+                    with col5:
+                        st.caption("Project Name")
+                        st.markdown(f"### {row['Project']}")
+                    with col6:
+                        st.caption("Min Qty Alert Level")
+                        st.markdown(f"### {int(row['Min Qty']) if pd.notna(row['Min Qty']) else 0}")
+                    
+                    barcode_img = generate_barcode_image(str(row['Part Number']))
+                    if barcode_img:
+                        st.image(barcode_img, caption=f"Visual Label Representation for {row['Part Number']}", width=300)
+                        
+                        st.download_button(
+                            label=f"Download Printable Label for {row['Part Number']}",
+                            data=barcode_img,
+                            file_name=f"label_{row['Part Number']}.png",
+                            mime="image/png",
+                            key=f"dl_loc_{idx}"
+                        )
+                    st.markdown("---")
+        else:
+            st.warning(f"No items currently registered at location [{loc_search_query}].")
+
+with tab3:
     st.header("Receive / Add Stock")
     add_query = st.text_input("Scan or Type part to ADD stock:", key="add_input").strip()
     
@@ -254,7 +300,7 @@ with tab2:
                 st.success("Stock updated permanently!")
                 st.rerun()
 
-with tab3:
+with tab4:
     st.header("Remove / Assemble Stock")
     take_query = st.text_input("Scan or Type part to TAKE stock:", key="take_input").strip()
     
@@ -297,7 +343,7 @@ with tab3:
                 save_permanent_data(df)
                 st.rerun()
 
-with tab4:
+with tab5:
     st.header("Move Parts to a New Location/Bin")
     loc_query = st.text_input("Scan or Type part to change its LOCATION:", key="loc_input").strip()
     
@@ -330,7 +376,7 @@ with tab4:
                     st.success(f"Location permanently updated to [{formatted_loc}]!")
                     st.rerun()
 
-with tab5:
+with tab6:
     st.header("Activity Log History")
     log_df = load_logs()
     if log_df.empty:
