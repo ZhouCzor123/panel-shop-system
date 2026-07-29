@@ -9,7 +9,6 @@ import pytz
 
 PASSWORD = "PanelShopSecure2026"
 
-# Initialize Supabase client natively using Streamlit Secrets
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -23,9 +22,10 @@ def load_permanent_data():
         else:
             if 'id' in df.columns:
                 df = df.drop(columns=['id'])
-            # Map legacy column if present
             if 'Project' in df.columns and 'Project Under' not in df.columns:
                 df.rename(columns={'Project': 'Project Under'}, inplace=True)
+            # Filter dummy rows
+            df = df[df['Part Number'] != "___DUMMY___"]
             df['Part Number'] = df['Part Number'].astype(str)
             if 'Part Type' not in df.columns:
                 df['Part Type'] = ""
@@ -43,8 +43,18 @@ def save_permanent_data(df):
         clean_df = clean_df.fillna("")
         
         data_to_insert = clean_df.to_dict(orient="records")
+        
+        # Insert new data FIRST before deleting old data to prevent accidental wipes
         if data_to_insert:
-            supabase.table("Inventory").delete().neq("Part Number", "___DUMMY___").execute()
+            supabase.table("Inventory").insert(data_to_insert).execute()
+            supabase.table("Inventory").delete().eq("Part Number", "___DUMMY___").execute()
+            # Clean up older entries matching inserted part numbers
+            for item in data_to_insert:
+                p_num = item['Part Number']
+                loc = item['Location']
+                proj = item['Project Under']
+                # Delete duplicate historical records if re-inserted
+                supabase.table("Inventory").delete().eq("Part Number", p_num).eq("Location", loc).eq("Project Under", proj).execute()
             supabase.table("Inventory").insert(data_to_insert).execute()
         st.cache_data.clear()
     except Exception as e:
@@ -61,6 +71,7 @@ def load_logs():
                 df = df.drop(columns=['id'])
             if 'Project' in df.columns and 'Project Under' not in df.columns:
                 df.rename(columns={'Project': 'Project Under'}, inplace=True)
+            df = df[df['Action'] != "___DUMMY___"]
             df['Part Number'] = df['Part Number'].astype(str)
             for col in ['Project Under', 'Part Type']:
                 if col not in df.columns:
@@ -74,7 +85,6 @@ def save_logs(df):
         clean_df = df.copy().fillna("")
         data_to_insert = clean_df.to_dict(orient="records")
         if data_to_insert:
-            supabase.table("Logs").delete().neq("Action", "___DUMMY___").execute()
             supabase.table("Logs").insert(data_to_insert).execute()
         st.cache_data.clear()
     except Exception as e:
@@ -95,8 +105,7 @@ def log_event(action, part_num, part_name, details, project_under="", part_type=
         'Part Type': str(part_type),
         'Details': str(details)
     }])
-    log_df = pd.concat([log_df, new_log], ignore_index=True)
-    save_logs(log_df)
+    save_logs(new_log)
 
 def is_valid_location(loc_string):
     clean_loc = loc_string.strip().upper()
@@ -272,7 +281,6 @@ with tab3:
     selected_proj_dropdown = col_p1.selectbox("Select from existing projects:", known_projects, key="proj_search_select")
     proj_search_query = col_p2.text_input("Or TYPE a project name:", key="proj_search_input").strip()
     
-    # Determine search target
     target_project = ""
     if proj_search_query:
         target_project = proj_search_query
@@ -380,25 +388,16 @@ with tab4:
                 elif not valid:
                     st.error("Invalid Location! Format must be Rack A-G (Shelves 1-3, or 1-4 for C, D, E). Examples: C4, F2")
                 else:
-                    duplicate_check = df[
-                        (df['Part Number'] == new_num) & 
-                        (df['Location'] == formatted_loc) & 
-                        (df['Project Under'] == new_proj)
-                    ]
-                    
-                    if not duplicate_check.empty:
-                        st.error("This exact part is already registered at this location for this project.")
-                    else:
-                        new_row = pd.DataFrame([{
-                            "Part Number": new_num, "Part Name": new_name,
-                            "Part Type": new_type, "Qty on Hand": new_qty, 
-                            "Location": formatted_loc, "Project Under": new_proj, "Min Qty": new_min_qty
-                        }])
-                        df = pd.concat([df, new_row], ignore_index=True)
-                        save_permanent_data(df)
-                        log_event("Added", new_num, new_name, f"Registered new item. Initial Qty: {new_qty} at {formatted_loc}.", project_under=new_proj, part_type=new_type)
-                        st.success("Successfully registered item permanently!")
-                        st.rerun()
+                    new_row = pd.DataFrame([{
+                        "Part Number": new_num, "Part Name": new_name,
+                        "Part Type": new_type, "Qty on Hand": new_qty, 
+                        "Location": formatted_loc, "Project Under": new_proj, "Min Qty": new_min_qty
+                    }])
+                    df = pd.concat([df, new_row], ignore_index=True)
+                    save_permanent_data(df)
+                    log_event("Added", new_num, new_name, f"Registered new item. Initial Qty: {new_qty} at {formatted_loc}.", project_under=new_proj, part_type=new_type)
+                    st.success("Successfully registered item permanently!")
+                    st.rerun()
         elif not results.empty:
             options = [f"{row['Part Name']} | Type: {row['Part Type']} | Proj Under: {row['Project Under']} | Qty: {row['Qty on Hand']} | Loc: {row['Location']}" for idx, row in results.iterrows()]
             choice = st.selectbox("Select the correct item row to add stock to:", options, key="add_select")
