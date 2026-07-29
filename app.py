@@ -265,13 +265,25 @@ with tab2:
 # --- TAB 3: PROJECT SEARCH ---
 with tab3:
     st.header("Search Database by Project Under")
-    proj_search_query = st.text_input("Enter or TYPE a Project name to filter all associated parts:", key="proj_search_input").strip()
     
+    col_p1, col_p2 = st.columns(2)
+    
+    known_projects = ["Select a Project..."] + sorted([p for p in df['Project Under'].dropna().astype(str).unique() if p.strip()])
+    selected_proj_dropdown = col_p1.selectbox("Select from existing projects:", known_projects, key="proj_search_select")
+    proj_search_query = col_p2.text_input("Or TYPE a project name:", key="proj_search_input").strip()
+    
+    # Determine search target
+    target_project = ""
     if proj_search_query:
-        results = df[df['Project Under'].str.contains(proj_search_query, case=False, na=False)]
+        target_project = proj_search_query
+    elif selected_proj_dropdown != "Select a Project...":
+        target_project = selected_proj_dropdown
+        
+    if target_project:
+        results = df[df['Project Under'].str.contains(target_project, case=False, na=False)]
         
         if not results.empty:
-            st.success(f"Found {len(results)} item(s) registered under project '{proj_search_query}':")
+            st.success(f"Found {len(results)} item(s) registered under project '{target_project}':")
             for idx, row in results.iterrows():
                 with st.container():
                     col1, col2, col3, col4, col5, col6, col7 = st.columns([1.8, 2.2, 1.5, 1.2, 1.2, 1.5, 1.2])
@@ -311,7 +323,7 @@ with tab3:
                         )
                     st.markdown("---")
         else:
-            st.warning(f"No items currently registered under project '{proj_search_query}'.")
+            st.warning(f"No items currently registered under project '{target_project}'.")
 
 # --- TAB 4: ADD INVENTORY WITH FILTERS ---
 with tab4:
