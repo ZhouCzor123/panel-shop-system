@@ -42,20 +42,17 @@ def save_permanent_data(df):
         clean_df['Min Qty'] = clean_df['Min Qty'].fillna(0).astype(int)
         clean_df = clean_df.fillna("")
         
+        # Remove any lingering ID columns before sending to Supabase
+        if 'id' in clean_df.columns:
+            clean_df = clean_df.drop(columns=['id'])
+            
         data_to_insert = clean_df.to_dict(orient="records")
         
-        # Insert new data FIRST before deleting old data to prevent accidental wipes
         if data_to_insert:
-            supabase.table("Inventory").insert(data_to_insert).execute()
+            # UPSERT cleanly updates matching records or inserts new ones without duplicate key crashes
+            supabase.table("Inventory").upsert(data_to_insert).execute()
             supabase.table("Inventory").delete().eq("Part Number", "___DUMMY___").execute()
-            # Clean up older entries matching inserted part numbers
-            for item in data_to_insert:
-                p_num = item['Part Number']
-                loc = item['Location']
-                proj = item['Project Under']
-                # Delete duplicate historical records if re-inserted
-                supabase.table("Inventory").delete().eq("Part Number", p_num).eq("Location", loc).eq("Project Under", proj).execute()
-            supabase.table("Inventory").insert(data_to_insert).execute()
+
         st.cache_data.clear()
     except Exception as e:
         st.error(f"Error saving to database: {e}")
@@ -83,16 +80,17 @@ def load_logs():
 def save_logs(df):
     try:
         clean_df = df.copy().fillna("")
+        if 'id' in clean_df.columns:
+            clean_df = clean_df.drop(columns=['id'])
+            
         data_to_insert = clean_df.to_dict(orient="records")
         if data_to_insert:
-            supabase.table("Logs").insert(data_to_insert).execute()
+            supabase.table("Logs").upsert(data_to_insert).execute()
         st.cache_data.clear()
     except Exception as e:
         st.error(f"Error saving logs: {e}")
 
 def log_event(action, part_num, part_name, details, project_under="", part_type=""):
-    log_df = load_logs()
-    
     eastern_tz = pytz.timezone('America/Toronto')
     current_time = pd.Timestamp.now(tz=eastern_tz).strftime("%Y-%m-%d %H:%M:%S")
     
