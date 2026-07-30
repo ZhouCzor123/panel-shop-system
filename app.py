@@ -6,7 +6,6 @@ from barcode.writer import ImageWriter
 from io import BytesIO
 import re
 import pytz
-import random
 
 PASSWORD = "PanelShopSecure2026"
 
@@ -340,7 +339,7 @@ with tab4:
     selected_proj_add = col_f1.selectbox("Filter by Project Under:", existing_projects, key="add_filter_proj")
     selected_type_add = col_f2.selectbox("Filter by Part Type:", existing_types, key="add_filter_type")
     
-    add_query = st.text_input("Scan or Type part to ADD stock (Leave blank for new item registration):", key="add_input").strip()
+    add_query = st.text_input("Scan or Type part to ADD stock:", key="add_input").strip()
     
     show_new_form = False
     if add_query:
@@ -352,19 +351,13 @@ with tab4:
             show_new_form = True
     else:
         results = pd.DataFrame()
-        if st.checkbox("Register a Brand New Item (Without Scanning Barcode)"):
+        if st.checkbox("Register a Brand New Item"):
             show_new_form = True
 
     if show_new_form:
         st.info("Fill out the fields below to register a brand new item:")
         
-        col_pn1, col_pn2 = st.columns([3, 1])
-        new_num = col_pn1.text_input("Part Number / Barcode ID (Optional - Leave blank to auto-generate):", value=add_query)
-        if col_pn2.button("⚡ Auto-Generate Barcode ID"):
-            auto_code = f"SYS-{random.randint(10000000, 99999999)}"
-            new_num = auto_code
-            st.info(f"Generated Barcode ID: `{auto_code}`")
-            
+        new_num = st.text_input("Part Number:", value=add_query)
         new_name = st.text_input("Part Name:")
         
         known_types = sorted([t for t in df['Part Type'].dropna().astype(str).unique() if t.strip()])
@@ -385,9 +378,8 @@ with tab4:
             valid, formatted_loc = is_valid_location(new_loc)
             
             if not new_num.strip():
-                new_num = f"SYS-{random.randint(10000000, 99999999)}"
-                
-            if not new_type:
+                st.error("Part Number is required and cannot be left blank.")
+            elif not new_type:
                 st.error("Part Type is required and cannot be left blank.")
             elif not valid:
                 st.error("Invalid Location! Format must be Rack A-G (Shelves 1-3, or 1-4 for C, D, E). Examples: C4, F2")
@@ -399,8 +391,8 @@ with tab4:
                 }])
                 df = pd.concat([df, new_row], ignore_index=True)
                 save_permanent_data(df)
-                log_event("Added", new_num, new_name, f"Registered new item with Barcode ID: {new_num}. Initial Qty: {new_qty} at {formatted_loc}.", project_under=new_proj, part_type=new_type)
-                st.success(f"Successfully registered item permanently with Barcode ID `{new_num}`!")
+                log_event("Added", new_num, new_name, f"Registered new item: {new_num}. Initial Qty: {new_qty} at {formatted_loc}.", project_under=new_proj, part_type=new_type)
+                st.success(f"Successfully registered item permanently with Part Number `{new_num}`!")
                 st.rerun()
 
     elif not results.empty:
@@ -606,7 +598,7 @@ st.sidebar.markdown(
     """
     <div style='text-align: center; color: gray; font-size: 0.8em;'>
         <b>Panel Shop Inventory System v2.0</b><br>
-        Designed & Built by <b>Zhou Czornoba</b><br>
+        Designed & Built by <b>Zhou Czor</b><br>
         Co-op Term May-August 2026
     </div>
     """, 
