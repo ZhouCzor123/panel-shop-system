@@ -498,9 +498,10 @@ with tab4:
         else:
             results = filtered_add
 
+        # SCENARIO 1: BRAND NEW PART (NOT IN SYSTEM)
         if results.empty and add_query:
             st.info("Brand new item detected! Fill out the fields below to register it:")
-            new_num = st.text_input("Part Number (This will become the barcode text):")
+            new_num = st.text_input("Part Number (This will become the barcode text):", value=add_query)
             new_name = st.text_input("Part Name:")
             
             known_types = sorted([t for t in df['Part Type'].dropna().astype(str).unique() if t.strip()])
@@ -537,26 +538,67 @@ with tab4:
                         }
                     }
                     st.rerun()
+
+        # SCENARIO 2: SCANNED PART EXISTS IN SYSTEM
         elif not results.empty:
-            options = [f"{row['Part Name']} | Type: {row['Part Type']} | Proj Under: {row['Project Under']} | Qty: {row['Qty on Hand']} | Loc: {row['Location']}" for idx, row in results.iterrows()]
-            choice = st.selectbox("Select the correct item row to add stock to:", options, key="add_select")
+            options = [f"{row['Part Number']} | {row['Part Name']} | Type: {row['Part Type']} | Proj: {row['Project Under']} | Qty: {row['Qty on Hand']} | Loc: {row['Location']}" for idx, row in results.iterrows()]
+            choice = st.selectbox("Select existing item listing:", options, key="add_select")
             row_idx = results.index[options.index(choice)]
             
-            amt_to_add = st.number_input("How many units are you adding?", min_value=1, step=10, value=10, key="add_amt")
-            new_min_qty = st.number_input(f"Update Minimum Quantity Alert Level (Current: {df.at[row_idx, 'Min Qty']}):", min_value=0, step=10, value=int(df.at[row_idx, 'Min Qty']))
+            # Destination Mode Radio
+            add_mode = st.radio(
+                "Destination Assignment:",
+                ["Add stock to this existing project listing", "Assign stock to a DIFFERENT / NEW project"],
+                key="add_mode_radio"
+            )
             
-            if st.button("Confirm Addition"):
-                st.session_state["pending_action"] = {
-                    "type": "ADD_EXISTING",
-                    "data": {
-                        "row_idx": row_idx,
-                        "amt_to_add": amt_to_add,
-                        "new_min_qty": new_min_qty,
-                        "part_name": df.at[row_idx, 'Part Name'],
-                        "new_total": int(df.at[row_idx, 'Qty on Hand'] + amt_to_add)
+            if add_mode == "Add stock to this existing project listing":
+                amt_to_add = st.number_input("How many units are you adding?", min_value=1, step=10, value=10, key="add_amt")
+                new_min_qty = st.number_input(f"Update Minimum Quantity Alert Level (Current: {df.at[row_idx, 'Min Qty']}):", min_value=0, step=10, value=int(df.at[row_idx, 'Min Qty']))
+                
+                if st.button("Confirm Addition"):
+                    st.session_state["pending_action"] = {
+                        "type": "ADD_EXISTING",
+                        "data": {
+                            "row_idx": row_idx,
+                            "amt_to_add": amt_to_add,
+                            "new_min_qty": new_min_qty,
+                            "part_name": df.at[row_idx, 'Part Name'],
+                            "new_total": int(df.at[row_idx, 'Qty on Hand'] + amt_to_add)
+                        }
                     }
-                }
-                st.rerun()
+                    st.rerun()
+            else:
+                st.markdown("---")
+                st.subheader(f"Create Separate Inventory Entry for Part: `{df.at[row_idx, 'Part Number']}`")
+                
+                col_np1, col_np2 = st.columns(2)
+                target_new_proj = col_np1.text_input("New Project Name:", key="split_proj_input").strip()
+                target_new_loc = col_np2.text_input("Storage Location (e.g. D3, C4):", key="split_loc_input").strip()
+                
+                split_qty = st.number_input("Quantity for this new project:", min_value=1, step=10, value=10, key="split_qty_input")
+                split_min_qty = st.number_input("Min Quantity Alert Threshold for this new project:", min_value=0, step=10, value=int(df.at[row_idx, 'Min Qty']), key="split_min_qty_input")
+                
+                if st.button("Save To New Project Inventory"):
+                    valid, formatted_loc = is_valid_location(target_new_loc)
+                    if not target_new_proj:
+                        st.error("Please specify the Project Name.")
+                    elif not valid:
+                        st.error("Invalid Location! Format must be Rack A-G (Shelves 1-3, or 1-4 for C, D, E). Examples: C4, F2")
+                    else:
+                        st.session_state["pending_action"] = {
+                            "type": "ADD_NEW",
+                            "data": {
+                                "Part Number": str(df.at[row_idx, 'Part Number']),
+                                "Part Name": str(df.at[row_idx, 'Part Name']),
+                                "Part Type": str(df.at[row_idx, 'Part Type']),
+                                "Qty on Hand": split_qty,
+                                "Location": formatted_loc,
+                                "Project Under": target_new_proj,
+                                "Min Qty": split_min_qty
+                            }
+                        }
+                        st.rerun()
 
 # --- TAB 5: TAKE INVENTORY WITH FILTERS ---
 with tab5:
