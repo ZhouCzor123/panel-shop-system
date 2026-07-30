@@ -119,7 +119,8 @@ def confirm_add_dialog(action_type, details_dict):
 @st.dialog("Confirm Part Removal")
 def confirm_take_dialog(details_dict):
     st.write("Are you sure you want to remove stock for assembly?")
-    st.markdown(f"**Taking:** {details_dict['amt_to_sub']} unit(s) from **{details_dict['part_name']}**")
+    st.markdown(f"**Taking:** {details_dict['amt_to_sub']} unit(s) from **{details_dict['part_name']}** (`{details_dict['part_num']}`)")
+    st.markdown(f"**Project:** {details_dict['proj_name']}")
     st.markdown(f"**Remaining Stock Will Be:** {details_dict['new_stock']}")
 
     col_yes, col_no = st.columns(2)
@@ -148,7 +149,6 @@ def confirm_alter_dialog(details_dict):
     if col_no.button("No", key="pop_alter_no"):
         st.session_state["pending_action"] = None
         st.rerun()
-
 
 st.set_page_config(
     page_title="Panel Shop Inventory System", 
@@ -204,7 +204,6 @@ if st.session_state["pending_action_confirmed"]:
                 "Project Under": str(data["Project Under"]),
                 "Min Qty": int(data["Min Qty"])
             }
-            # Inserts a brand new standalone row regardless of existing part numbers
             supabase.table("Inventory").insert([payload]).execute()
             log_event("Added", data["Part Number"], data["Part Name"], f"Registered item under project '{data['Project Under']}'. Initial Qty: {data['Qty on Hand']} at {data['Location']}.", project_under=data["Project Under"], part_type=data["Part Type"])
             st.success("Successfully saved to database!")
@@ -226,25 +225,36 @@ if st.session_state["pending_action_confirmed"]:
 
         elif act["type"] == "TAKE":
             data = act["data"]
-            idx = data["row_idx"]
-            row_id = df.at[idx, 'id'] if 'id' in df.columns else None
+            row_id = data.get("row_id")
             amt_to_sub = data["amt_to_sub"]
             new_stock = data["new_stock"]
-            
+            part_num = data["part_num"]
+            part_name = data["part_name"]
+            proj_name = data["proj_name"]
+            p_type = data["p_type"]
+            min_threshold = data["min_threshold"]
+
             if new_stock <= 0:
-                if pd.notna(row_id):
+                if row_id and pd.notna(row_id):
                     supabase.table("Inventory").delete().eq("id", row_id).execute()
                 else:
-                    supabase.table("Inventory").delete().eq("Part Number", data["part_num"]).eq("Project Under", data["proj_name"]).execute()
-                log_event("Removed", data["part_num"], data["part_name"], f"Removed {amt_to_sub} units. Stock hit 0, deleted.", project_under=data["proj_name"], part_type=data["p_type"])
-                st.toast(f"🚨 ALERT: {data['part_name']} is out of stock!", icon="🚨")
+                    supabase.table("Inventory").delete().eq("Part Number", part_num).eq("Project Under", proj_name).execute()
+                
+                log_event("Removed", part_num, part_name, f"Removed {amt_to_sub} units. Stock hit 0, deleted.", project_under=proj_name, part_type=p_type)
+                st.toast(f"🚨 ALERT: {part_name} is out of stock!", icon="🚨")
+                st.success("Item quantity dropped to 0 and was removed from inventory!")
             else:
-                if pd.notna(row_id):
+                if row_id and pd.notna(row_id):
                     supabase.table("Inventory").update({"Qty on Hand": new_stock}).eq("id", row_id).execute()
                 else:
-                    supabase.table("Inventory").update({"Qty on Hand": new_stock}).eq("Part Number", data["part_num"]).eq("Project Under", data["proj_name"]).execute()
-                log_event("Removed", data["part_num"], data["part_name"], f"Removed {amt_to_sub} units. Remaining: {new_stock}", project_under=data["proj_name"], part_type=data["p_type"])
-            st.success("Stock updated!")
+                    supabase.table("Inventory").update({"Qty on Hand": new_stock}).eq("Part Number", part_num).eq("Project Under", proj_name).execute()
+                
+                log_event("Removed", part_num, part_name, f"Removed {amt_to_sub} units. Remaining: {new_stock}", project_under=proj_name, part_type=p_type)
+                if new_stock <= min_threshold and min_threshold > 0:
+                    st.warning(f"⚠️ LOW STOCK ALERT: {part_name} is down to {new_stock} units!")
+                    st.toast(f"Low Stock Alert: {part_name} needs reordering!", icon="⚠️")
+                else:
+                    st.success(f"Stock removed! Remaining: {new_stock}")
 
         elif act["type"] == "ALTER":
             data = act["data"]
@@ -534,19 +544,27 @@ with tab5:
         results = filtered_take[(filtered_take['Part Number'].astype(str) == take_query) | (filtered_take['Part Name'].str.contains(take_query, case=False, na=False))] if take_query else filtered_take
         
         if not results.empty:
-            options = [f"{row['Part Name']} | Proj: {row['Project Under']} | Qty: {row['Qty on Hand']} | Loc: {row['Location']}" for idx, row in results.iterrows()]
+            options = [f"{row['Part Number']} | {row['Part Name']} | Proj: {row['Project Under']} | Qty: {row['Qty on Hand']} | Loc: {row['Location']}" for idx, row in results.iterrows()]
             choice = st.selectbox("Select the item row you are pulling from:", options, key="take_select")
-            row_idx = results.index[options.index(choice)]
+            
+            selected_row = results.iloc[options.index(choice)]
             amt_to_sub = st.number_input("How many units are you taking for assembly?", min_value=1, step=10, value=10, key="take_amt")
             
             if st.button("Confirm Removal"):
-                current_stock = df.at[row_idx, 'Qty on Hand']
+                current_stock = int(selected_row['Qty on Hand'])
+                target_id = selected_row.get('id') if 'id' in selected_row else None
+                
                 st.session_state["pending_action"] = {
                     "type": "TAKE",
                     "data": {
-                        "row_idx": row_idx, "amt_to_sub": amt_to_sub, "new_stock": current_stock - amt_to_sub,
-                        "part_num": df.at[row_idx, 'Part Number'], "part_name": df.at[row_idx, 'Part Name'],
-                        "proj_name": df.at[row_idx, 'Project Under'], "p_type": df.at[row_idx, 'Part Type'], "min_threshold": df.at[row_idx, 'Min Qty']
+                        "row_id": target_id,
+                        "amt_to_sub": amt_to_sub,
+                        "new_stock": current_stock - amt_to_sub,
+                        "part_num": str(selected_row['Part Number']),
+                        "part_name": str(selected_row['Part Name']),
+                        "proj_name": str(selected_row['Project Under']),
+                        "p_type": str(selected_row['Part Type']),
+                        "min_threshold": int(selected_row['Min Qty']) if pd.notna(selected_row['Min Qty']) else 0
                     }
                 }
                 st.rerun()
