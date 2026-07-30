@@ -20,8 +20,6 @@ def load_permanent_data():
         if df.empty:
             df = pd.DataFrame(columns=['Part Number', 'Part Name', 'Part Type', 'Qty on Hand', 'Location', 'Project Under', 'Min Qty'])
         else:
-            if 'id' in df.columns:
-                df = df.drop(columns=['id'])
             if 'Project' in df.columns and 'Project Under' not in df.columns:
                 df.rename(columns={'Project': 'Project Under'}, inplace=True)
             df = df[df['Part Number'] != "___DUMMY___"]
@@ -41,14 +39,17 @@ def save_permanent_data(df):
         clean_df['Min Qty'] = clean_df['Min Qty'].fillna(0).astype(int)
         clean_df = clean_df.fillna("")
         
+        # Drop internal pandas index/ID if present to let Supabase handle rows cleanly
         if 'id' in clean_df.columns:
             clean_df = clean_df.drop(columns=['id'])
             
         data_to_insert = clean_df.to_dict(orient="records")
         
         if data_to_insert:
-            supabase.table("Inventory").upsert(data_to_insert).execute()
+            # First clean up dummy rows
             supabase.table("Inventory").delete().eq("Part Number", "___DUMMY___").execute()
+            # Upsert dataset cleanly
+            supabase.table("Inventory").upsert(data_to_insert).execute()
 
         st.cache_data.clear()
     except Exception as e:
@@ -225,11 +226,21 @@ if st.session_state["pending_action_confirmed"]:
     
     if act["type"] == "ADD_NEW":
         data = act["data"]
-        new_row = pd.DataFrame([data])
-        df = pd.concat([df, new_row], ignore_index=True)
+        # Check if an entry with identical Part Number, Location, and Project Under already exists
+        match = df[(df['Part Number'].astype(str) == str(data["Part Number"])) & 
+                   (df['Location'].astype(str) == str(data["Location"])) & 
+                   (df['Project Under'].astype(str) == str(data["Project Under"]))]
+        
+        if not match.empty:
+            idx = match.index[0]
+            df.at[idx, 'Qty on Hand'] += int(data["Qty on Hand"])
+        else:
+            new_row = pd.DataFrame([data])
+            df = pd.concat([df, new_row], ignore_index=True)
+            
         save_permanent_data(df)
-        log_event("Added", data["Part Number"], data["Part Name"], f"Registered new item. Initial Qty: {data['Qty on Hand']} at {data['Location']}.", project_under=data["Project Under"], part_type=data["Part Type"])
-        st.success("Successfully registered item permanently!")
+        log_event("Added", data["Part Number"], data["Part Name"], f"Registered item under project '{data['Project Under']}'. Initial Qty: {data['Qty on Hand']} at {data['Location']}.", project_under=data["Project Under"], part_type=data["Part Type"])
+        st.success("Successfully saved to project inventory!")
 
     elif act["type"] == "ADD_EXISTING":
         data = act["data"]
