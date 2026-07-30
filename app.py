@@ -6,6 +6,7 @@ from barcode.writer import ImageWriter
 from io import BytesIO
 import re
 import pytz
+import random
 
 PASSWORD = "PanelShopSecure2026"
 
@@ -132,21 +133,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# Auto-select script so scanning automatically replaces existing text
-st.components.v1.html(
-    """
-    <script>
-    const inputs = window.parent.document.querySelectorAll('input[type="text"]');
-    inputs.forEach(input => {
-        input.addEventListener('focus', function() {
-            this.select();
-        });
-    });
-    </script>
-    """,
-    height=0,
-)
-
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 
@@ -178,11 +164,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
 # --- TAB 1: SCAN SEARCH ---
 with tab1:
     st.header("Search Database by Part")
-    col_s1, col_s2 = st.columns([5, 1])
-    search_query = col_s1.text_input("Click here to SCAN a barcode, or TYPE a part name, number, or part type:", key="search_input").strip()
-    if col_s2.button("Clear Search", key="cls_search"):
-        st.session_state["search_input"] = ""
-        st.rerun()
+    search_query = st.text_input("Click here to SCAN a barcode, or TYPE a part name, number, or part type:", key="search_input").strip()
     
     if search_query:
         results = df[
@@ -358,75 +340,84 @@ with tab4:
     selected_proj_add = col_f1.selectbox("Filter by Project Under:", existing_projects, key="add_filter_proj")
     selected_type_add = col_f2.selectbox("Filter by Part Type:", existing_types, key="add_filter_type")
     
-    add_query = st.text_input("Scan or Type part to ADD stock:", key="add_input").strip()
+    add_query = st.text_input("Scan or Type part to ADD stock (Leave blank for new item registration):", key="add_input").strip()
     
-    if add_query or selected_proj_add != "All Projects" or selected_type_add != "All Part Types":
-        filtered_add = df.copy()
-        
-        if selected_proj_add != "All Projects":
-            filtered_add = filtered_add[filtered_add['Project Under'] == selected_proj_add]
-        if selected_type_add != "All Part Types":
-            filtered_add = filtered_add[filtered_add['Part Type'] == selected_type_add]
-        
-        if add_query:
-            results = filtered_add[
-                (filtered_add['Part Number'].astype(str) == add_query) | 
-                (filtered_add['Part Name'].str.contains(add_query, case=False, na=False))
-            ]
-        else:
-            results = filtered_add
+    show_new_form = False
+    if add_query:
+        results = df[
+            (df['Part Number'].astype(str) == add_query) | 
+            (df['Part Name'].str.contains(add_query, case=False, na=False))
+        ]
+        if results.empty:
+            show_new_form = True
+    else:
+        results = pd.DataFrame()
+        if st.checkbox("Register a Brand New Item (Without Scanning Barcode)"):
+            show_new_form = True
 
-        if results.empty and add_query:
-            st.info("Brand new item detected! Fill out the fields below to register it:")
-            new_num = st.text_input("Part Number (This will become the barcode text):", value=add_query)
-            new_name = st.text_input("Part Name:")
+    if show_new_form:
+        st.info("Fill out the fields below to register a brand new item:")
+        
+        col_pn1, col_pn2 = st.columns([3, 1])
+        new_num = col_pn1.text_input("Part Number / Barcode ID (Optional - Leave blank to auto-generate):", value=add_query)
+        if col_pn2.button("⚡ Auto-Generate Barcode ID"):
+            auto_code = f"SYS-{random.randint(10000000, 99999999)}"
+            new_num = auto_code
+            st.info(f"Generated Barcode ID: `{auto_code}`")
             
-            known_types = sorted([t for t in df['Part Type'].dropna().astype(str).unique() if t.strip()])
-            type_options = known_types + ["+ Add New Part Type"]
+        new_name = st.text_input("Part Name:")
+        
+        known_types = sorted([t for t in df['Part Type'].dropna().astype(str).unique() if t.strip()])
+        type_options = known_types + ["+ Add New Part Type"]
+        
+        selected_type_opt = st.selectbox("Part Type", options=type_options, key="new_part_type_select")
+        if selected_type_opt == "+ Add New Part Type":
+            new_type = st.text_input("Enter New Part Type Name:", key="new_part_type_custom").strip()
+        else:
+            new_type = selected_type_opt
             
-            selected_type_opt = st.selectbox("Part Type", options=type_options, key="new_part_type_select")
-            if selected_type_opt == "+ Add New Part Type":
-                new_type = st.text_input("Enter New Part Type Name:", key="new_part_type_custom").strip()
-            else:
-                new_type = selected_type_opt
+        new_qty = st.number_input("Initial Quantity:", min_value=1, step=10, value=10)
+        new_loc = st.text_input("Storage Location (Allowed: A1-A3, B1-B3, C1-C4, D1-D4, E1-E4, F1-F3, G1-G3):")
+        new_proj = st.text_input("Project Under:")
+        new_min_qty = st.number_input("Minimum Quantity Alert Threshold (Optional, set 0 for None):", min_value=0, step=10, value=0)
+        
+        if st.button("Save Brand New Item"):
+            valid, formatted_loc = is_valid_location(new_loc)
+            
+            if not new_num.strip():
+                new_num = f"SYS-{random.randint(10000000, 99999999)}"
                 
-            new_qty = st.number_input("Initial Quantity:", min_value=1, step=10, value=10)
-            new_loc = st.text_input("Storage Location (Allowed: A1-A3, B1-B3, C1-C4, D1-D4, E1-E4, F1-F3, G1-G3):")
-            new_proj = st.text_input("Project Under:")
-            new_min_qty = st.number_input("Minimum Quantity Alert Threshold (Optional, set 0 for None):", min_value=0, step=10, value=0)
-            
-            if st.button("Save Brand New Item"):
-                valid, formatted_loc = is_valid_location(new_loc)
-                if not new_type:
-                    st.error("Part Type is required and cannot be left blank.")
-                elif not valid:
-                    st.error("Invalid Location! Format must be Rack A-G (Shelves 1-3, or 1-4 for C, D, E). Examples: C4, F2")
-                else:
-                    new_row = pd.DataFrame([{
-                        "Part Number": new_num, "Part Name": new_name,
-                        "Part Type": new_type, "Qty on Hand": new_qty, 
-                        "Location": formatted_loc, "Project Under": new_proj, "Min Qty": new_min_qty
-                    }])
-                    df = pd.concat([df, new_row], ignore_index=True)
-                    save_permanent_data(df)
-                    log_event("Added", new_num, new_name, f"Registered new item. Initial Qty: {new_qty} at {formatted_loc}.", project_under=new_proj, part_type=new_type)
-                    st.success("Successfully registered item permanently!")
-                    st.rerun()
-        elif not results.empty:
-            options = [f"{row['Part Name']} | Type: {row['Part Type']} | Proj Under: {row['Project Under']} | Qty: {row['Qty on Hand']} | Loc: {row['Location']}" for idx, row in results.iterrows()]
-            choice = st.selectbox("Select the correct item row to add stock to:", options, key="add_select")
-            row_idx = results.index[options.index(choice)]
-            
-            amt_to_add = st.number_input("How many units are you adding?", min_value=1, step=10, value=10, key="add_amt")
-            new_min_qty = st.number_input(f"Update Minimum Quantity Alert Level (Current: {df.at[row_idx, 'Min Qty']}):", min_value=0, step=10, value=int(df.at[row_idx, 'Min Qty']))
-            
-            if st.button("Confirm Addition"):
-                df.at[row_idx, 'Qty on Hand'] += amt_to_add
-                df.at[row_idx, 'Min Qty'] = new_min_qty
+            if not new_type:
+                st.error("Part Type is required and cannot be left blank.")
+            elif not valid:
+                st.error("Invalid Location! Format must be Rack A-G (Shelves 1-3, or 1-4 for C, D, E). Examples: C4, F2")
+            else:
+                new_row = pd.DataFrame([{
+                    "Part Number": new_num, "Part Name": new_name,
+                    "Part Type": new_type, "Qty on Hand": new_qty, 
+                    "Location": formatted_loc, "Project Under": new_proj, "Min Qty": new_min_qty
+                }])
+                df = pd.concat([df, new_row], ignore_index=True)
                 save_permanent_data(df)
-                log_event("Added", df.at[row_idx, 'Part Number'], df.at[row_idx, 'Part Name'], f"Added {amt_to_add} units. New Total: {df.at[row_idx, 'Qty on Hand']}.", project_under=df.at[row_idx, 'Project Under'], part_type=df.at[row_idx, 'Part Type'])
-                st.success("Stock updated permanently!")
+                log_event("Added", new_num, new_name, f"Registered new item with Barcode ID: {new_num}. Initial Qty: {new_qty} at {formatted_loc}.", project_under=new_proj, part_type=new_type)
+                st.success(f"Successfully registered item permanently with Barcode ID `{new_num}`!")
                 st.rerun()
+
+    elif not results.empty:
+        options = [f"{row['Part Name']} | Type: {row['Part Type']} | Proj Under: {row['Project Under']} | Qty: {row['Qty on Hand']} | Loc: {row['Location']}" for idx, row in results.iterrows()]
+        choice = st.selectbox("Select the correct item row to add stock to:", options, key="add_select")
+        row_idx = results.index[options.index(choice)]
+        
+        amt_to_add = st.number_input("How many units are you adding?", min_value=1, step=10, value=10, key="add_amt")
+        new_min_qty = st.number_input(f"Update Minimum Quantity Alert Level (Current: {df.at[row_idx, 'Min Qty']}):", min_value=0, step=10, value=int(df.at[row_idx, 'Min Qty']))
+        
+        if st.button("Confirm Addition"):
+            df.at[row_idx, 'Qty on Hand'] += amt_to_add
+            df.at[row_idx, 'Min Qty'] = new_min_qty
+            save_permanent_data(df)
+            log_event("Added", df.at[row_idx, 'Part Number'], df.at[row_idx, 'Part Name'], f"Added {amt_to_add} units. New Total: {df.at[row_idx, 'Qty on Hand']}.", project_under=df.at[row_idx, 'Project Under'], part_type=df.at[row_idx, 'Part Type'])
+            st.success("Stock updated permanently!")
+            st.rerun()
 
 # --- TAB 5: TAKE INVENTORY WITH FILTERS ---
 with tab5:
