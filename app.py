@@ -164,7 +164,10 @@ def confirm_take_dialog(details_dict):
 @st.dialog("Confirm Part Alteration")
 def confirm_alter_dialog(details_dict):
     st.write("Are you sure you want to update these part attributes?")
-    st.markdown(f"**Part Number:** `{details_dict['part_num']}`")
+    if details_dict['old_part_num'] != details_dict['updated_part_num']:
+        st.markdown(f"**Part Number Change:** `{details_dict['old_part_num']}` ➔ `{details_dict['updated_part_num']}`")
+    else:
+        st.markdown(f"**Part Number:** `{details_dict['updated_part_num']}`")
     st.markdown(f"**New Name:** {details_dict['updated_name']}")
     st.markdown(f"**New Project:** {details_dict['updated_project']}")
     st.markdown(f"**New Type:** {details_dict['updated_type']}")
@@ -267,12 +270,20 @@ if st.session_state["pending_action_confirmed"]:
     elif act["type"] == "ALTER":
         data = act["data"]
         idx = data["row_idx"]
+        old_num = data["old_part_num"]
+        new_num = data["updated_part_num"]
+        
+        # If Part Number changed, delete the record under the old Part Number from Supabase first
+        if old_num != new_num:
+            supabase.table("Inventory").delete().eq("Part Number", old_num).execute()
+
+        df.at[idx, 'Part Number'] = new_num
         df.at[idx, 'Part Name'] = data["updated_name"]
         df.at[idx, 'Project Under'] = data["updated_project"]
         df.at[idx, 'Part Type'] = data["updated_type"]
         
         save_permanent_data(df)
-        log_event("Altered", df.at[idx, 'Part Number'], data["updated_name"], f"Updated Name ('{data['updated_name']}'), Project Under ('{data['updated_project']}'), Type ('{data['updated_type']}')", project_under=data["updated_project"], part_type=data["updated_type"])
+        log_event("Altered", new_num, data["updated_name"], f"Updated Part Number ('{old_num}' ➔ '{new_num}'), Name ('{data['updated_name']}'), Project ('{data['updated_project']}'), Type ('{data['updated_type']}')", project_under=data["updated_project"], part_type=data["updated_type"])
         st.success("Part attributes successfully updated in database!")
 
     # Reset trigger flags
@@ -618,6 +629,7 @@ with tab6:
             
             st.subheader(f"Editing Part: {df.at[row_idx, 'Part Number']}")
             
+            updated_part_num = st.text_input("Part Number:", value=str(df.at[row_idx, 'Part Number']))
             updated_name = st.text_input("Part Name:", value=str(df.at[row_idx, 'Part Name']))
             
             col_a1, col_a2 = st.columns(2)
@@ -640,14 +652,17 @@ with tab6:
                 updated_type = selected_type_opt
             
             if st.button("Save Altered Attributes"):
-                if not updated_type:
+                if not updated_part_num.strip():
+                    st.error("Part Number cannot be blank.")
+                elif not updated_type:
                     st.error("Part Type is required and cannot be left blank.")
                 else:
                     st.session_state["pending_action"] = {
                         "type": "ALTER",
                         "data": {
                             "row_idx": row_idx,
-                            "part_num": df.at[row_idx, 'Part Number'],
+                            "old_part_num": str(df.at[row_idx, 'Part Number']),
+                            "updated_part_num": updated_part_num.strip(),
                             "updated_name": updated_name,
                             "updated_project": updated_project,
                             "updated_type": updated_type
