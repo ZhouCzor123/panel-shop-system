@@ -130,7 +130,7 @@ def highlight_shortages(row):
 @st.dialog("Confirm Part Addition")
 def confirm_add_dialog(action_type, details_dict):
     st.write("Are you sure you want to proceed with this inventory addition?")
-    if action_type == "NEW_ITEM":
+    if action_type == "ADD_NEW":
         st.markdown(f"**Part Number:** `{details_dict['Part Number']}`")
         st.markdown(f"**Part Name:** {details_dict['Part Name']}")
         st.markdown(f"**Type:** {details_dict['Part Type']} | **Qty:** {details_dict['Qty on Hand']}")
@@ -273,7 +273,6 @@ if st.session_state["pending_action_confirmed"]:
         old_num = data["old_part_num"]
         new_num = data["updated_part_num"]
         
-        # If Part Number changed, delete the record under the old Part Number from Supabase first
         if old_num != new_num:
             supabase.table("Inventory").delete().eq("Part Number", old_num).execute()
 
@@ -528,9 +527,13 @@ with tab4:
                     st.session_state["pending_action"] = {
                         "type": "ADD_NEW",
                         "data": {
-                            "Part Number": new_num, "Part Name": new_name,
-                            "Part Type": new_type, "Qty on Hand": new_qty, 
-                            "Location": formatted_loc, "Project Under": new_proj, "Min Qty": new_min_qty
+                            "Part Number": new_num,
+                            "Part Name": new_name,
+                            "Part Type": new_type,
+                            "Qty on Hand": new_qty, 
+                            "Location": formatted_loc,
+                            "Project Under": new_proj,
+                            "Min Qty": new_min_qty
                         }
                     }
                     st.rerun()
