@@ -20,6 +20,8 @@ def load_permanent_data():
         if df.empty:
             df = pd.DataFrame(columns=['Part Number', 'Part Name', 'Part Type', 'Qty on Hand', 'Location', 'Project Under', 'Min Qty'])
         else:
+            if 'id' in df.columns:
+                df = df.drop(columns=['id'])
             if 'Project' in df.columns and 'Project Under' not in df.columns:
                 df.rename(columns={'Project': 'Project Under'}, inplace=True)
             df = df[df['Part Number'] != "___DUMMY___"]
@@ -39,17 +41,16 @@ def save_permanent_data(df):
         clean_df['Min Qty'] = clean_df['Min Qty'].fillna(0).astype(int)
         clean_df = clean_df.fillna("")
         
-        # Drop internal pandas index/ID if present to let Supabase handle rows cleanly
         if 'id' in clean_df.columns:
             clean_df = clean_df.drop(columns=['id'])
             
         data_to_insert = clean_df.to_dict(orient="records")
         
         if data_to_insert:
-            # First clean up dummy rows
-            supabase.table("Inventory").delete().eq("Part Number", "___DUMMY___").execute()
-            # Upsert dataset cleanly
-            supabase.table("Inventory").upsert(data_to_insert).execute()
+            # Wipe existing records first to prevent primary key/upsert collisions
+            supabase.table("Inventory").delete().neq("Part Number", "___DUMMY___").execute()
+            # Clean insert of all current inventory rows
+            supabase.table("Inventory").insert(data_to_insert).execute()
 
         st.cache_data.clear()
     except Exception as e:
@@ -83,7 +84,7 @@ def save_logs(df):
             
         data_to_insert = clean_df.to_dict(orient="records")
         if data_to_insert:
-            supabase.table("Logs").upsert(data_to_insert).execute()
+            supabase.table("Logs").insert(data_to_insert).execute()
         st.cache_data.clear()
     except Exception as e:
         st.error(f"Error saving logs: {e}")
@@ -283,9 +284,6 @@ if st.session_state["pending_action_confirmed"]:
         idx = data["row_idx"]
         old_num = data["old_part_num"]
         new_num = data["updated_part_num"]
-        
-        if old_num != new_num:
-            supabase.table("Inventory").delete().eq("Part Number", old_num).execute()
 
         df.at[idx, 'Part Number'] = new_num
         df.at[idx, 'Part Name'] = data["updated_name"]
