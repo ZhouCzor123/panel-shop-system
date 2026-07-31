@@ -13,94 +13,87 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# --- DATABASE LOADERS (SAFE READ-ONLY) ---
 def load_permanent_data():
     try:
         response = supabase.table("Inventory").select("*").execute()
         df = pd.DataFrame(response.data)
         if df.empty:
-            df = pd.DataFrame(columns=['Part Number', 'Part Name', 'Part Type', 'Qty on Hand', 'Location', 'Project Under', 'Min Qty'])
-        else:
-            if 'id' in df.columns:
-                df = df.drop(columns=['id'])
-            if 'Project' in df.columns and 'Project Under' not in df.columns:
-                df.rename(columns={'Project': 'Project Under'}, inplace=True)
-            df = df[df['Part Number'] != "___DUMMY___"]
-            df['Part Number'] = df['Part Number'].astype(str)
-            if 'Part Type' not in df.columns:
-                df['Part Type'] = ""
-            if 'Min Qty' not in df.columns:
-                df['Min Qty'] = 0
+            return pd.DataFrame(columns=['Part Number', 'Part Name', 'Part Type', 'Qty on Hand', 'Location', 'Project Under', 'Min Qty'])
+        
+        if 'id' in df.columns:
+            df = df.drop(columns=['id'])
+        if 'Project' in df.columns and 'Project Under' not in df.columns:
+            df.rename(columns={'Project': 'Project Under'}, inplace=True)
+            
+        df = df[df['Part Number'] != "___DUMMY___"]
+        df['Part Number'] = df['Part Number'].astype(str)
+        if 'Part Type' not in df.columns:
+            df['Part Type'] = ""
+        if 'Min Qty' not in df.columns:
+            df['Min Qty'] = 0
         return df
-    except Exception:
+    except Exception as e:
+        st.error(f"Error loading inventory: {e}")
         return pd.DataFrame(columns=['Part Number', 'Part Name', 'Part Type', 'Qty on Hand', 'Location', 'Project Under', 'Min Qty'])
 
-def save_permanent_data(df):
+def load_disregarded_items():
     try:
-        clean_df = df.copy()
-        clean_df['Qty on Hand'] = clean_df['Qty on Hand'].fillna(0).astype(int)
-        clean_df['Min Qty'] = clean_df['Min Qty'].fillna(0).astype(int)
-        clean_df = clean_df.fillna("")
-        
-        data_to_insert = clean_df.to_dict(orient="records")
-        if data_to_insert:
-            supabase.table("Inventory").insert(data_to_insert).execute()
-            supabase.table("Inventory").delete().eq("Part Number", "___DUMMY___").execute()
-            for item in data_to_insert:
-                p_num = item['Part Number']
-                loc = item['Location']
-                proj = item['Project Under']
-                supabase.table("Inventory").delete().eq("Part Number", p_num).eq("Location", loc).eq("Project Under", proj).execute()
-            supabase.table("Inventory").insert(data_to_insert).execute()
+        response = supabase.table("Disregarded_Items").select("*").execute()
+        df = pd.DataFrame(response.data)
+        if df.empty:
+            return []
+        return df['Part Number'].astype(str).tolist()
+    except Exception:
+        return []
+
+def disregard_item(part_num, project_under):
+    try:
+        supabase.table("Disregarded_Items").insert({
+            "Part Number": str(part_num),
+            "Project Under": str(project_under)
+        }).execute()
         st.cache_data.clear()
     except Exception as e:
-        st.error(f"Error saving to database: {e}")
+        st.error(f"Error disregarding item: {e}")
 
 def load_logs():
     try:
         response = supabase.table("Logs").select("*").execute()
         df = pd.DataFrame(response.data)
         if df.empty:
-            df = pd.DataFrame(columns=['Timestamp', 'Action', 'Part Number', 'Part Name', 'Project Under', 'Part Type', 'Details'])
-        else:
-            if 'id' in df.columns:
-                df = df.drop(columns=['id'])
-            if 'Project' in df.columns and 'Project Under' not in df.columns:
-                df.rename(columns={'Project': 'Project Under'}, inplace=True)
-            df = df[df['Action'] != "___DUMMY___"]
-            df['Part Number'] = df['Part Number'].astype(str)
-            for col in ['Project Under', 'Part Type']:
-                if col not in df.columns:
-                    df[col] = ""
+            return pd.DataFrame(columns=['Timestamp', 'Action', 'Part Number', 'Part Name', 'Project Under', 'Part Type', 'Details'])
+        
+        if 'id' in df.columns:
+            df = df.drop(columns=['id'])
+        if 'Project' in df.columns and 'Project Under' not in df.columns:
+            df.rename(columns={'Project': 'Project Under'}, inplace=True)
+            
+        df = df[df['Action'] != "___DUMMY___"]
+        df['Part Number'] = df['Part Number'].astype(str)
+        for col in ['Project Under', 'Part Type']:
+            if col not in df.columns:
+                df[col] = ""
         return df
     except Exception:
         return pd.DataFrame(columns=['Timestamp', 'Action', 'Part Number', 'Part Name', 'Project Under', 'Part Type', 'Details'])
 
-def save_logs(df):
-    try:
-        clean_df = df.copy().fillna("")
-        data_to_insert = clean_df.to_dict(orient="records")
-        if data_to_insert:
-            supabase.table("Logs").insert(data_to_insert).execute()
-        st.cache_data.clear()
-    except Exception as e:
-        st.error(f"Error saving logs: {e}")
-
 def log_event(action, part_num, part_name, details, project_under="", part_type=""):
-    log_df = load_logs()
-    
-    eastern_tz = pytz.timezone('America/Toronto')
-    current_time = pd.Timestamp.now(tz=eastern_tz).strftime("%Y-%m-%d %H:%M:%S")
-    
-    new_log = pd.DataFrame([{
-        'Timestamp': current_time,
-        'Action': action,
-        'Part Number': str(part_num),
-        'Part Name': str(part_name),
-        'Project Under': str(project_under),
-        'Part Type': str(part_type),
-        'Details': str(details)
-    }])
-    save_logs(new_log)
+    try:
+        eastern_tz = pytz.timezone('America/Toronto')
+        current_time = pd.Timestamp.now(tz=eastern_tz).strftime("%Y-%m-%d %H:%M:%S")
+        
+        supabase.table("Logs").insert({
+            'Timestamp': current_time,
+            'Action': str(action),
+            'Part Number': str(part_num),
+            'Part Name': str(part_name),
+            'Project Under': str(project_under),
+            'Part Type': str(part_type),
+            'Details': str(details)
+        }).execute()
+    except Exception as e:
+        st.error(f"Error logging event: {e}")
 
 def is_valid_location(loc_string):
     clean_loc = loc_string.strip().upper()
@@ -126,6 +119,7 @@ def highlight_shortages(row):
         return ['background-color: #ffcccc; color: #900000; font-weight: bold'] * len(row)
     return [''] * len(row)
 
+# --- PAGE SETUP ---
 st.set_page_config(
     page_title="Panel Shop Inventory System", 
     page_icon="BlackMcDonald_Logo.webp", 
@@ -148,6 +142,7 @@ if not st.session_state["authenticated"]:
 
 st.title("Panel Shop Inventory System")
 df = load_permanent_data()
+disregarded_list = load_disregarded_items()
 
 tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "Scan Search", 
@@ -203,7 +198,6 @@ with tab1:
                     barcode_img = generate_barcode_image(str(row['Part Number']))
                     if barcode_img:
                         st.image(barcode_img, caption=f"Visual Label Representation for {row['Part Number']}", width=300)
-                        
                         st.download_button(
                             label=f"Download Printable Label for {row['Part Number']}",
                             data=barcode_img,
@@ -254,7 +248,6 @@ with tab2:
                     barcode_img = generate_barcode_image(str(row['Part Number']))
                     if barcode_img:
                         st.image(barcode_img, caption=f"Visual Label Representation for {row['Part Number']}", width=300)
-                        
                         st.download_button(
                             label=f"Download Printable Label for {row['Part Number']}",
                             data=barcode_img,
@@ -269,7 +262,6 @@ with tab2:
 # --- TAB 3: PROJECT SEARCH ---
 with tab3:
     st.header("Search Database by Project Under")
-    
     col_p1, col_p2 = st.columns(2)
     
     known_projects = ["Select a Project..."] + sorted([p for p in df['Project Under'].dropna().astype(str).unique() if p.strip()])
@@ -316,7 +308,6 @@ with tab3:
                     barcode_img = generate_barcode_image(str(row['Part Number']))
                     if barcode_img:
                         st.image(barcode_img, caption=f"Visual Label Representation for {row['Part Number']}", width=300)
-                        
                         st.download_button(
                             label=f"Download Printable Label for {row['Part Number']}",
                             data=barcode_img,
@@ -328,7 +319,7 @@ with tab3:
         else:
             st.warning(f"No items currently registered under project '{target_project}'.")
 
-# --- TAB 4: ADD INVENTORY WITH FILTERS ---
+# --- TAB 4: ADD INVENTORY ---
 with tab4:
     st.header("Receive / Add Stock")
     
@@ -378,21 +369,24 @@ with tab4:
             valid, formatted_loc = is_valid_location(new_loc)
             
             if not new_num.strip():
-                st.error("Part Number is required and cannot be left blank.")
+                st.error("Part Number is required.")
             elif not new_type:
-                st.error("Part Type is required and cannot be left blank.")
+                st.error("Part Type is required.")
             elif not valid:
                 st.error("Invalid Location! Format must be Rack A-G (Shelves 1-3, or 1-4 for C, D, E). Examples: C4, F2")
             else:
-                new_row = pd.DataFrame([{
-                    "Part Number": new_num, "Part Name": new_name,
-                    "Part Type": new_type, "Qty on Hand": new_qty, 
-                    "Location": formatted_loc, "Project Under": new_proj, "Min Qty": new_min_qty
-                }])
-                df = pd.concat([df, new_row], ignore_index=True)
-                save_permanent_data(df)
-                log_event("Added", new_num, new_name, f"Registered new item: {new_num}. Initial Qty: {new_qty} at {formatted_loc}.", project_under=new_proj, part_type=new_type)
-                st.success(f"Successfully registered item permanently with Part Number `{new_num}`!")
+                # SAFE Direct Insert
+                supabase.table("Inventory").insert({
+                    "Part Number": str(new_num),
+                    "Part Name": str(new_name),
+                    "Part Type": str(new_type),
+                    "Qty on Hand": int(new_qty),
+                    "Location": str(formatted_loc),
+                    "Project Under": str(new_proj),
+                    "Min Qty": int(new_min_qty)
+                }).execute()
+                log_event("Added", new_num, new_name, f"Registered new item. Initial Qty: {new_qty} at {formatted_loc}.", project_under=new_proj, part_type=new_type)
+                st.success(f"Successfully registered item `{new_num}`!")
                 st.rerun()
 
     elif not results.empty:
@@ -404,14 +398,22 @@ with tab4:
         new_min_qty = st.number_input(f"Update Minimum Quantity Alert Level (Current: {df.at[row_idx, 'Min Qty']}):", min_value=0, step=10, value=int(df.at[row_idx, 'Min Qty']))
         
         if st.button("Confirm Addition"):
-            df.at[row_idx, 'Qty on Hand'] += amt_to_add
-            df.at[row_idx, 'Min Qty'] = new_min_qty
-            save_permanent_data(df)
-            log_event("Added", df.at[row_idx, 'Part Number'], df.at[row_idx, 'Part Name'], f"Added {amt_to_add} units. New Total: {df.at[row_idx, 'Qty on Hand']}.", project_under=df.at[row_idx, 'Project Under'], part_type=df.at[row_idx, 'Part Type'])
+            target_pnum = df.at[row_idx, 'Part Number']
+            target_loc = df.at[row_idx, 'Location']
+            target_proj = df.at[row_idx, 'Project Under']
+            new_total = int(df.at[row_idx, 'Qty on Hand']) + amt_to_add
+            
+            # SAFE Direct Targeted Update
+            supabase.table("Inventory").update({
+                "Qty on Hand": new_total,
+                "Min Qty": int(new_min_qty)
+            }).eq("Part Number", target_pnum).eq("Location", target_loc).eq("Project Under", target_proj).execute()
+            
+            log_event("Added", target_pnum, df.at[row_idx, 'Part Name'], f"Added {amt_to_add} units. New Total: {new_total}.", project_under=target_proj, part_type=df.at[row_idx, 'Part Type'])
             st.success("Stock updated permanently!")
             st.rerun()
 
-# --- TAB 5: TAKE INVENTORY WITH FILTERS ---
+# --- TAB 5: TAKE INVENTORY ---
 with tab5:
     st.header("Remove / Assemble Stock")
     
@@ -449,30 +451,29 @@ with tab5:
             
             amt_to_sub = st.number_input("How many units are you taking for assembly?", min_value=1, step=10, value=10, key="take_amt")
             if st.button("Confirm Removal"):
-                current_stock = df.at[row_idx, 'Qty on Hand']
+                current_stock = int(df.at[row_idx, 'Qty on Hand'])
                 part_num = df.at[row_idx, 'Part Number']
                 part_name = df.at[row_idx, 'Part Name']
                 proj_name = df.at[row_idx, 'Project Under']
+                loc_name = df.at[row_idx, 'Location']
                 p_type = df.at[row_idx, 'Part Type']
-                min_threshold = df.at[row_idx, 'Min Qty']
+                min_threshold = int(df.at[row_idx, 'Min Qty'])
                 new_stock = current_stock - amt_to_sub
                 
                 if new_stock <= 0:
-                    df = df.drop(row_idx).reset_index(drop=True)
-                    log_event("Removed", part_num, part_name, f"Removed {amt_to_sub} units. Stock hit 0, item deleted.", project_under=proj_name, part_type=p_type)
+                    # Direct single-row update to 0
+                    supabase.table("Inventory").update({"Qty on Hand": 0}).eq("Part Number", part_num).eq("Location", loc_name).eq("Project Under", proj_name).execute()
+                    log_event("Removed", part_num, part_name, f"Removed {amt_to_sub} units. Stock hit 0.", project_under=proj_name, part_type=p_type)
                     st.toast(f"🚨 ALERT: {part_name} has hit 0 and is completely out of stock!", icon="🚨")
-                    st.success("Item quantity dropped to 0 and has been removed from permanent inventory!")
+                    st.success("Item stock dropped to 0!")
                 else:
-                    df.at[row_idx, 'Qty on Hand'] = new_stock
+                    supabase.table("Inventory").update({"Qty on Hand": new_stock}).eq("Part Number", part_num).eq("Location", loc_name).eq("Project Under", proj_name).execute()
                     log_event("Removed", part_num, part_name, f"Removed {amt_to_sub} units. Remaining: {new_stock}", project_under=proj_name, part_type=p_type)
                     
                     if new_stock <= min_threshold and min_threshold > 0:
-                        st.warning(f"⚠️ LOW STOCK ALERT: {part_name} is down to {new_stock} units! (Minimum threshold: {min_threshold})")
-                        st.toast(f"Low Stock Alert: {part_name} needs reordering!", icon="⚠️")
+                        st.warning(f"⚠️ LOW STOCK ALERT: {part_name} is down to {new_stock} units!")
                     else:
                         st.success(f"Stock removed! Remaining units: {new_stock}")
-                
-                save_permanent_data(df)
                 st.rerun()
 
 # --- TAB 6: ALTER PART ---
@@ -494,6 +495,10 @@ with tab6:
             row_idx = results.index[options.index(choice)]
             
             st.subheader(f"Editing Part: {df.at[row_idx, 'Part Number']}")
+            
+            orig_pnum = df.at[row_idx, 'Part Number']
+            orig_loc = df.at[row_idx, 'Location']
+            orig_proj = df.at[row_idx, 'Project Under']
             
             updated_name = st.text_input("Part Name:", value=str(df.at[row_idx, 'Part Name']))
             
@@ -518,15 +523,17 @@ with tab6:
             
             if st.button("Save Altered Attributes"):
                 if not updated_type:
-                    st.error("Part Type is required and cannot be left blank.")
+                    st.error("Part Type is required.")
                 else:
-                    df.at[row_idx, 'Part Name'] = updated_name
-                    df.at[row_idx, 'Project Under'] = updated_project
-                    df.at[row_idx, 'Part Type'] = updated_type
+                    # Direct targeted update on specific item row
+                    supabase.table("Inventory").update({
+                        "Part Name": str(updated_name),
+                        "Project Under": str(updated_project),
+                        "Part Type": str(updated_type)
+                    }).eq("Part Number", orig_pnum).eq("Location", orig_loc).eq("Project Under", orig_proj).execute()
                     
-                    save_permanent_data(df)
-                    log_event("Altered", df.at[row_idx, 'Part Number'], updated_name, f"Updated Name ('{updated_name}'), Project Under ('{updated_project}'), Type ('{updated_type}')", project_under=updated_project, part_type=updated_type)
-                    st.success("Part attributes successfully updated in database!")
+                    log_event("Altered", orig_pnum, updated_name, f"Updated Attributes.", project_under=updated_project, part_type=updated_type)
+                    st.success("Part attributes successfully updated!")
                     st.rerun()
 
 # --- TAB 7: CHANGE LOCATION ---
@@ -551,7 +558,7 @@ with tab7:
             if st.button("Update Location"):
                 valid, formatted_loc = is_valid_location(new_location)
                 if not valid:
-                    st.error("Invalid Location! Must be Rack A-G (Shelves 1-3, or 1-4 for C, D, E). Examples: C4, F1")
+                    st.error("Invalid Location! Examples: C4, F1")
                 else:
                     old_loc = df.at[row_idx, 'Location']
                     part_num = df.at[row_idx, 'Part Number']
@@ -559,10 +566,12 @@ with tab7:
                     proj_name = df.at[row_idx, 'Project Under']
                     p_type = df.at[row_idx, 'Part Type']
                     
-                    df.at[row_idx, 'Location'] = formatted_loc
-                    save_permanent_data(df)
+                    supabase.table("Inventory").update({
+                        "Location": formatted_loc
+                    }).eq("Part Number", part_num).eq("Location", old_loc).eq("Project Under", proj_name).execute()
+                    
                     log_event("Moved", part_num, part_name, f"Moved from {old_loc} to {formatted_loc}", project_under=proj_name, part_type=p_type)
-                    st.success(f"Location permanently updated to [{formatted_loc}]!")
+                    st.success(f"Location updated to [{formatted_loc}]!")
                     st.rerun()
 
 # --- TAB 8: LOG HISTORY WITH FILTERS ---
@@ -588,17 +597,50 @@ with tab8:
             
         st.dataframe(filtered_logs.iloc[::-1], use_container_width=True)
 
+# --- SIDEBAR: LIVE INVENTORY GRID ---
 st.sidebar.header("Live Inventory Grid View")
 styled_df = df.style.apply(highlight_shortages, axis=1)
 st.sidebar.dataframe(styled_df, use_container_width=True)
 
-# --- Permanent Legacy Footer ---
+# --- SIDEBAR: LOW / OUT OF STOCK TABLE & DISREGARD ACTION ---
+st.sidebar.markdown("---")
+st.sidebar.header("⚠️ Low / Out of Stock Items")
+
+# Filter items that are at or below Min Qty OR completely out of stock (Qty == 0)
+low_stock_mask = (df['Qty on Hand'] <= df['Min Qty']) | (df['Qty on Hand'] == 0)
+low_stock_df = df[low_stock_mask].copy()
+
+# Exclude items user previously clicked 'Disregard' on
+if disregarded_list:
+    low_stock_df = low_stock_df[~low_stock_df['Part Number'].astype(str).isin(disregarded_list)]
+
+if low_stock_df.empty:
+    st.sidebar.success("No active low/out-of-stock items needing restock.")
+else:
+    for idx, row in low_stock_df.iterrows():
+        p_num = str(row['Part Number'])
+        p_name = str(row['Part Name'])
+        qty = int(row['Qty on Hand'])
+        proj = str(row['Project Under'])
+        
+        with st.sidebar.container():
+            col_info, col_btn = st.sidebar.columns([3, 1.5])
+            with col_info:
+                st.markdown(f"**`{p_num}`** — {p_name}")
+                st.caption(f"Qty Left: **{qty}** | Project: {proj}")
+            with col_btn:
+                if st.button("Disregard", key=f"disregard_{p_num}_{idx}"):
+                    disregard_item(p_num, proj)
+                    st.rerun()
+            st.sidebar.markdown("<hr style='margin:4px 0;'>", unsafe_allow_html=True)
+
+# --- Sidebar Footer ---
 st.sidebar.markdown("---")
 st.sidebar.markdown(
     """
     <div style='text-align: center; color: gray; font-size: 0.8em;'>
         <b>Panel Shop Inventory System v2.0</b><br>
-        Designed & Built by <b>Zhou Czor</b><br>
+        Designed & Built by <b>Zhou Czornoba</b><br>
         Co-op Term May-August 2026
     </div>
     """, 
