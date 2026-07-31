@@ -375,7 +375,6 @@ with tab4:
             elif not valid:
                 st.error("Invalid Location! Format must be Rack A-G (Shelves 1-3, or 1-4 for C, D, E). Examples: C4, F2")
             else:
-                # SAFE Direct Insert
                 supabase.table("Inventory").insert({
                     "Part Number": str(new_num),
                     "Part Name": str(new_name),
@@ -403,7 +402,6 @@ with tab4:
             target_proj = df.at[row_idx, 'Project Under']
             new_total = int(df.at[row_idx, 'Qty on Hand']) + amt_to_add
             
-            # SAFE Direct Targeted Update
             supabase.table("Inventory").update({
                 "Qty on Hand": new_total,
                 "Min Qty": int(new_min_qty)
@@ -461,7 +459,6 @@ with tab5:
                 new_stock = current_stock - amt_to_sub
                 
                 if new_stock <= 0:
-                    # Direct single-row update to 0
                     supabase.table("Inventory").update({"Qty on Hand": 0}).eq("Part Number", part_num).eq("Location", loc_name).eq("Project Under", proj_name).execute()
                     log_event("Removed", part_num, part_name, f"Removed {amt_to_sub} units. Stock hit 0.", project_under=proj_name, part_type=p_type)
                     st.toast(f"🚨 ALERT: {part_name} has hit 0 and is completely out of stock!", icon="🚨")
@@ -525,7 +522,6 @@ with tab6:
                 if not updated_type:
                     st.error("Part Type is required.")
                 else:
-                    # Direct targeted update on specific item row
                     supabase.table("Inventory").update({
                         "Part Name": str(updated_name),
                         "Project Under": str(updated_project),
@@ -602,7 +598,7 @@ st.sidebar.header("Live Inventory Grid View")
 styled_df = df.style.apply(highlight_shortages, axis=1)
 st.sidebar.dataframe(styled_df, use_container_width=True)
 
-# --- SIDEBAR: LOW / OUT OF STOCK TABLE & DISREGARD ACTION ---
+# --- SIDEBAR: LOW / OUT OF STOCK COPYABLE DATA TABLE & DISREGARD ---
 st.sidebar.markdown("---")
 st.sidebar.header("⚠️ Low / Out of Stock Items")
 
@@ -610,29 +606,45 @@ st.sidebar.header("⚠️ Low / Out of Stock Items")
 low_stock_mask = (df['Qty on Hand'] <= df['Min Qty']) | (df['Qty on Hand'] == 0)
 low_stock_df = df[low_stock_mask].copy()
 
-# Exclude items user previously clicked 'Disregard' on
+# Exclude disregarded items
 if disregarded_list:
     low_stock_df = low_stock_df[~low_stock_df['Part Number'].astype(str).isin(disregarded_list)]
 
 if low_stock_df.empty:
     st.sidebar.success("No active low/out-of-stock items needing restock.")
 else:
-    for idx, row in low_stock_df.iterrows():
-        p_num = str(row['Part Number'])
-        p_name = str(row['Part Name'])
-        qty = int(row['Qty on Hand'])
-        proj = str(row['Project Under'])
-        
-        with st.sidebar.container():
-            col_info, col_btn = st.sidebar.columns([3, 1.5])
-            with col_info:
-                st.markdown(f"**`{p_num}`** — {p_name}")
-                st.caption(f"Qty Left: **{qty}** | Project: {proj}")
-            with col_btn:
-                if st.button("Disregard", key=f"disregard_{p_num}_{idx}"):
-                    disregard_item(p_num, proj)
-                    st.rerun()
-            st.sidebar.markdown("<hr style='margin:4px 0;'>", unsafe_allow_html=True)
+    # Prepare clean display table with requested columns
+    display_df = low_stock_df[['Part Name', 'Part Number', 'Project Under']].copy()
+    display_df.insert(0, "Disregard", False)
+    
+    st.sidebar.caption("Hover table and click the 📋 icon top-right to COPY table for emails.")
+    
+    # Interactive Data Editor with Copy Button support built-in
+    edited_df = st.sidebar.data_editor(
+        display_df,
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "Disregard": st.column_config.CheckboxColumn(
+                "Disregard",
+                help="Check to mark item as completed/no longer needing restock",
+                default=False
+            ),
+            "Part Name": st.column_config.TextColumn("Product Name", disabled=True),
+            "Part Number": st.column_config.TextColumn("Part Number", disabled=True),
+            "Project Under": st.column_config.TextColumn("Project Under", disabled=True)
+        },
+        key="low_stock_editor"
+    )
+    
+    # Confirm Disregard logic
+    disregarded_rows = edited_df[edited_df['Disregard'] == True]
+    if not disregarded_rows.empty:
+        if st.sidebar.button("Confirm Disregard Selected"):
+            for _, r in disregarded_rows.iterrows():
+                disregard_item(r['Part Number'], r['Project Under'])
+            st.sidebar.success("Items disregarded!")
+            st.rerun()
 
 # --- Sidebar Footer ---
 st.sidebar.markdown("---")
