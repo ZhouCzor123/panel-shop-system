@@ -14,13 +14,13 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- DATABASE LOADERS (SAFE READ-ONLY) ---
+# --- DATABASE LOADERS ---
 def load_permanent_data():
     try:
         response = supabase.table("Inventory").select("*").execute()
         df = pd.DataFrame(response.data)
         if df.empty:
-            return pd.DataFrame(columns=['Part Number', 'Part Name', 'Part Type', 'Qty on Hand', 'Location', 'Project Under', 'Min Qty'])
+            return pd.DataFrame(columns=['Part Number', 'Part Name', 'Part Type', 'Qty on Hand', 'Location', 'Project Under', 'Min Qty', 'PO Number'])
         
         if 'id' in df.columns:
             df = df.drop(columns=['id'])
@@ -33,10 +33,12 @@ def load_permanent_data():
             df['Part Type'] = ""
         if 'Min Qty' not in df.columns:
             df['Min Qty'] = 0
+        if 'PO Number' not in df.columns:
+            df['PO Number'] = ""
         return df
     except Exception as e:
         st.error(f"Error loading inventory: {e}")
-        return pd.DataFrame(columns=['Part Number', 'Part Name', 'Part Type', 'Qty on Hand', 'Location', 'Project Under', 'Min Qty'])
+        return pd.DataFrame(columns=['Part Number', 'Part Name', 'Part Type', 'Qty on Hand', 'Location', 'Project Under', 'Min Qty', 'PO Number'])
 
 def load_disregarded_items():
     try:
@@ -58,6 +60,13 @@ def disregard_item(part_num, project_under):
     except Exception as e:
         st.error(f"Error disregarding item: {e}")
 
+def remove_from_disregarded(part_num):
+    try:
+        supabase.table("Disregarded_Items").delete().eq("Part Number", str(part_num)).execute()
+        st.cache_data.clear()
+    except Exception as e:
+        st.error(f"Error restoring disregarded item: {e}")
+
 def load_logs():
     try:
         response = supabase.table("Logs").select("*").execute()
@@ -72,7 +81,7 @@ def load_logs():
             
         df = df[df['Action'] != "___DUMMY___"]
         df['Part Number'] = df['Part Number'].astype(str)
-        for col in ['Project Under', 'Part Type']:
+        for col in ['Project Under', 'Part Type', 'PO Number']:
             if col not in df.columns:
                 df[col] = ""
         return df
@@ -98,8 +107,16 @@ def log_event(action, part_num, part_name, details, project_under="", part_type=
 
 def is_valid_location(loc_string):
     clean_loc = loc_string.strip().upper()
-    pattern = r"^([C-E][1-4]|[A-B][1-3]|[F-G][1-3])$"
+    pattern = r"^([C-E][1-4]|[A-B][1-3]|[F-I][1-3])$"
     return bool(re.match(pattern, clean_loc)), clean_loc
+
+def get_location_category(loc_string):
+    clean_loc = loc_string.strip().upper()
+    if re.match(r"^[G-I]", clean_loc):
+        return "Upstairs"
+    elif re.match(r"^[A-F]", clean_loc):
+        return "Downstairs"
+    return "Unknown"
 
 def generate_barcode_image(part_number):
     try:
@@ -120,18 +137,129 @@ def highlight_shortages(row):
         return ['background-color: #ffcccc; color: #900000; font-weight: bold'] * len(row)
     return [''] * len(row)
 
-# Universal Helper Function for Flexible Fuzzy Searching across multiple fields
+# Space and Dash Insensitive Search Helper Function
+def normalize_str(val):
+    if pd.isna(val):
+        return ""
+    return re.sub(r'[\s\-_]+', '', str(val)).lower()
+
 def fuzzy_search_df(dataframe, query):
     if not query:
         return pd.DataFrame()
-    q = query.strip().lower()
+    norm_query = normalize_str(query)
+    
     mask = (
-        dataframe['Part Number'].astype(str).str.lower().str.contains(q, na=False) |
-        dataframe['Part Name'].astype(str).str.lower().str.contains(q, na=False) |
-        dataframe['Part Type'].astype(str).str.lower().str.contains(q, na=False) |
-        dataframe['Project Under'].astype(str).str.lower().str.contains(q, na=False)
+        dataframe['Part Number'].apply(normalize_str).str.contains(norm_query, na=False) |
+        dataframe['Part Name'].apply(normalize_str).str.contains(norm_query, na=False) |
+        dataframe['Part Type'].apply(normalize_str).str.contains(norm_query, na=False) |
+        dataframe['Project Under'].apply(normalize_str).str.contains(norm_query, na=False) |
+        dataframe['PO Number'].apply(normalize_str).str.contains(norm_query, na=False)
     )
     return dataframe[mask]
+
+# --- CONFIRMATION DIALOGS ---
+@st.dialog("Confirm Addition")
+def confirm_add_dialog(pnum, pname, amt, loc, proj, ptype, po, is_new, current_qty=0, min_qty=0):
+    if is_new:
+        st.write(f"Are you sure you want to register brand new item **{pname}** (`{pnum}`)?")
+        st.write(f"- **Initial Quantity:** {amt}")
+        st.write(f"- **Location:** {loc}")
+        st.write(f"- **Project:** {proj}")
+    else:
+        st.write(f"Are you sure you want to add **{amt}** units to **{pname}** (`{pnum}`)?")
+        st.write(f"- **New Total Quantity:** {current_qty + amt}")
+
+    col1, col2 = st.columns(2)
+    if col1.button("Yes, Confirm Add", type="primary"):
+        remove_from_disregarded(pnum)
+        if is_new:
+            supabase.table("Inventory").insert({
+                "Part Number": str(pnum),
+                "Part Name": str(pname),
+                "Part Type": str(ptype),
+                "Qty on Hand": int(amt),
+                "Location": str(loc),
+                "Project Under": str(proj),
+                "PO Number": str(po),
+                "Min Qty": int(min_qty)
+            }).execute()
+            log_event("Added", pnum, pname, f"Registered new item. Initial Qty: {amt} at {loc}. PO#: {po}", project_under=proj, part_type=ptype)
+        else:
+            # Flexible update by Part Number to prevent silent update failures
+            supabase.table("Inventory").update({
+                "Qty on Hand": current_qty + amt,
+                "Min Qty": int(min_qty),
+                "Location": str(loc),
+                "Project Under": str(proj)
+            }).eq("Part Number", str(pnum)).execute()
+            log_event("Added", pnum, pname, f"Added {amt} units. New Total: {current_qty + amt}.", project_under=proj, part_type=ptype)
+        
+        st.success("Stock updated permanently!")
+        st.rerun()
+    if col2.button("No, Cancel"):
+        st.rerun()
+
+@st.dialog("Confirm Removal")
+def confirm_take_dialog(pnum, pname, amt, loc, proj, ptype, current_qty, min_qty):
+    new_stock = current_qty - amt
+    st.write(f"Are you sure you want to remove **{amt}** units of **{pname}** (`{pnum}`)?")
+    st.write(f"- **Current Stock:** {current_stock}")
+    st.write(f"- **Remaining Stock After Removal:** {max(0, new_stock)}")
+
+    col1, col2 = st.columns(2)
+    if col1.button("Yes, Confirm Removal", type="primary"):
+        if new_stock <= 0:
+            supabase.table("Inventory").update({"Qty on Hand": 0}).eq("Part Number", str(pnum)).execute()
+            log_event("Removed", pnum, pname, f"Removed {amt} units. Stock hit 0.", project_under=proj, part_type=ptype)
+            st.toast(f"🚨 ALERT: {pname} has hit 0 and is completely out of stock!", icon="🚨")
+        else:
+            supabase.table("Inventory").update({"Qty on Hand": new_stock}).eq("Part Number", str(pnum)).execute()
+            log_event("Removed", pnum, pname, f"Removed {amt} units. Remaining: {new_stock}", project_under=proj, part_type=ptype)
+            
+            if new_stock <= min_qty and min_qty > 0:
+                st.warning(f"⚠️ LOW STOCK ALERT: {pname} is down to {new_stock} units!")
+        
+        st.success("Stock removed permanently!")
+        st.rerun()
+    if col2.button("No, Cancel"):
+        st.rerun()
+
+@st.dialog("Confirm Alteration")
+def confirm_alter_dialog(orig_pnum, orig_loc, orig_proj, new_name, new_proj, new_po, new_type):
+    st.write(f"Are you sure you want to update attributes for **{new_name}** (`{orig_pnum}`)?")
+    st.write(f"- **Project Under:** {new_proj}")
+    st.write(f"- **PO Number:** {new_po}")
+    st.write(f"- **Part Type:** {new_type}")
+
+    col1, col2 = st.columns(2)
+    if col1.button("Yes, Save Changes", type="primary"):
+        supabase.table("Inventory").update({
+            "Part Name": str(new_name),
+            "Project Under": str(new_proj),
+            "PO Number": str(new_po),
+            "Part Type": str(new_type)
+        }).eq("Part Number", str(orig_pnum)).execute()
+        
+        log_event("Altered", orig_pnum, new_name, f"Updated Attributes (PO#: {new_po}).", project_under=new_proj, part_type=new_type)
+        st.success("Part attributes successfully updated!")
+        st.rerun()
+    if col2.button("No, Cancel"):
+        st.rerun()
+
+@st.dialog("Confirm Disregard")
+def confirm_disregard_dialog(disregarded_rows):
+    st.write("Are you sure you want to disregard the following out-of-stock item(s)?")
+    for _, r in disregarded_rows.iterrows():
+        st.write(f"- **{r['Part Name']}** (`{r['Part Number']}`) [Project: {r['Project Under']}]")
+
+    col1, col2 = st.columns(2)
+    if col1.button("Yes, Confirm Disregard", type="primary"):
+        for _, r in disregarded_rows.iterrows():
+            disregard_item(r['Part Number'], r['Project Under'])
+        st.sidebar.success("Item(s) disregarded!")
+        st.rerun()
+    if col2.button("No, Cancel"):
+        st.rerun()
 
 # --- PAGE SETUP ---
 st.set_page_config(
@@ -158,7 +286,6 @@ st.title("Panel Shop Inventory System")
 df = load_permanent_data()
 disregarded_list = load_disregarded_items()
 
-# Filter out disregarded items from the active dataset
 active_df = df.copy()
 if disregarded_list:
     active_df = active_df[~active_df['Part Number'].astype(str).isin(disregarded_list)]
@@ -166,7 +293,7 @@ if disregarded_list:
 tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "Scan Search", 
     "Location Search",
-    "Project Search",
+    "Project & PO Search",
     "Add Inventory", 
     "Take Inventory", 
     "Alter Part",
@@ -177,7 +304,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
 # --- TAB 1: SCAN SEARCH ---
 with tab1:
     st.header("Search Database by Part")
-    search_query = st.text_input("Click here to SCAN a barcode, or TYPE part details:", key="search_input").strip()
+    search_query = st.text_input("Click here to SCAN a barcode, or TYPE part details (Name, Number, Type, PO#):", key="search_input").strip()
     
     if search_query:
         results = fuzzy_search_df(active_df, search_query)
@@ -186,7 +313,7 @@ with tab1:
             st.success(f"Found {len(results)} matching item(s):")
             for idx, row in results.iterrows():
                 with st.container():
-                    col1, col2, col3, col4, col5, col6, col7 = st.columns([1.8, 2.2, 1.5, 1.2, 1.2, 1.5, 1.2])
+                    col1, col2, col3, col4, col5, col6, col7 = st.columns([1.8, 2.2, 1.3, 1.0, 1.5, 1.3, 1.2])
                     
                     with col1:
                         st.caption("Part Number")
@@ -201,11 +328,12 @@ with tab1:
                         st.caption("Quantity")
                         st.markdown(f"### {int(row['Qty on Hand'])}")
                     with col5:
+                        loc_cat = get_location_category(str(row['Location']))
                         st.caption("Location")
-                        st.markdown(f"### [{row['Location']}]")
+                        st.markdown(f"### [{row['Location']}] *({loc_cat})*")
                     with col6:
-                        st.caption("Project Under")
-                        st.markdown(f"### {row['Project Under']}")
+                        st.caption("Project / PO#")
+                        st.markdown(f"**Proj:** {row['Project Under']}\n\n**PO#:** {row['PO Number'] if row.get('PO Number') else 'N/A'}")
                     with col7:
                         st.caption("Min Qty Limit")
                         st.markdown(f"### {int(row['Min Qty']) if pd.notna(row['Min Qty']) else 0}")
@@ -227,76 +355,105 @@ with tab1:
 # --- TAB 2: LOCATION SEARCH ---
 with tab2:
     st.header("Search Database by Storage Location")
-    loc_search_query = st.text_input("Enter Storage Location Code (e.g. C3, D4, F1):", key="loc_search_input").strip().upper()
     
-    if loc_search_query:
-        results = active_df[active_df['Location'].astype(str).str.upper() == loc_search_query]
+    col_l1, col_l2 = st.columns(2)
+    selected_floor = col_l1.selectbox("Filter by Floor Category:", ["All Floors", "Downstairs (A-F Sections)", "Upstairs (G-I Sections)"], key="floor_select")
+    loc_search_query = col_l2.text_input("Or TYPE Specific Location Code (e.g. C3, G1, H2):", key="loc_search_input").strip().upper()
+    
+    results = active_df.copy()
+    
+    if selected_floor == "Downstairs (A-F Sections)":
+        results = results[results['Location'].astype(str).str.upper().str.match(r"^[A-F]")]
+    elif selected_floor == "Upstairs (G-I Sections)":
+        results = results[results['Location'].astype(str).str.upper().str.match(r"^[G-I]")]
         
-        if not results.empty:
-            st.success(f"Found {len(results)} item(s) stored in location [{loc_search_query}]:")
-            for idx, row in results.iterrows():
-                with st.container():
-                    col1, col2, col3, col4, col5, col6, col7 = st.columns([1.8, 2.2, 1.5, 1.2, 1.2, 1.5, 1.2])
-                    
-                    with col1:
-                        st.caption("Part Number")
-                        st.markdown(f"### `{row['Part Number']}`")
-                    with col2:
-                        st.caption("Part Name")
-                        st.markdown(f"### {row['Part Name']}")
-                    with col3:
-                        st.caption("Part Type")
-                        st.markdown(f"**{row['Part Type'] if row.get('Part Type') else 'N/A'}**")
-                    with col4:
-                        st.caption("Quantity")
-                        st.markdown(f"### {int(row['Qty on Hand'])}")
-                    with col5:
-                        st.caption("Location")
-                        st.markdown(f"### [{row['Location']}]")
-                    with col6:
-                        st.caption("Project Under")
-                        st.markdown(f"### {row['Project Under']}")
-                    with col7:
-                        st.caption("Min Qty Limit")
-                        st.markdown(f"### {int(row['Min Qty']) if pd.notna(row['Min Qty']) else 0}")
-                    
-                    barcode_img = generate_barcode_image(str(row['Part Number']))
-                    if barcode_img:
-                        st.image(barcode_img, caption=f"Visual Label Representation for {row['Part Number']}", width=300)
-                        st.download_button(
-                            label=f"Download Printable Label for {row['Part Number']}",
-                            data=barcode_img,
-                            file_name=f"label_{row['Part Number']}.png",
-                            mime="image/png",
-                            key=f"dl_loc_{idx}"
-                        )
-                    st.markdown("---")
-        else:
-            st.warning(f"No items currently registered at location [{loc_search_query}].")
+    if loc_search_query:
+        norm_loc = normalize_str(loc_search_query)
+        results = results[results['Location'].apply(normalize_str) == norm_loc]
+        
+    if not results.empty:
+        st.success(f"Found {len(results)} item(s) in selected location filter:")
+        for idx, row in results.iterrows():
+            with st.container():
+                col1, col2, col3, col4, col5, col6, col7 = st.columns([1.8, 2.2, 1.3, 1.0, 1.5, 1.3, 1.2])
+                
+                with col1:
+                    st.caption("Part Number")
+                    st.markdown(f"### `{row['Part Number']}`")
+                with col2:
+                    st.caption("Part Name")
+                    st.markdown(f"### {row['Part Name']}")
+                with col3:
+                    st.caption("Part Type")
+                    st.markdown(f"**{row['Part Type'] if row.get('Part Type') else 'N/A'}**")
+                with col4:
+                    st.caption("Quantity")
+                    st.markdown(f"### {int(row['Qty on Hand'])}")
+                with col5:
+                    loc_cat = get_location_category(str(row['Location']))
+                    st.caption("Location")
+                    st.markdown(f"### [{row['Location']}] *({loc_cat})*")
+                with col6:
+                    st.caption("Project / PO#")
+                    st.markdown(f"**Proj:** {row['Project Under']}\n\n**PO#:** {row['PO Number'] if row.get('PO Number') else 'N/A'}")
+                with col7:
+                    st.caption("Min Qty Limit")
+                    st.markdown(f"### {int(row['Min Qty']) if pd.notna(row['Min Qty']) else 0}")
+                
+                barcode_img = generate_barcode_image(str(row['Part Number']))
+                if barcode_img:
+                    st.image(barcode_img, caption=f"Visual Label Representation for {row['Part Number']}", width=300)
+                    st.download_button(
+                        label=f"Download Printable Label for {row['Part Number']}",
+                        data=barcode_img,
+                        file_name=f"label_{row['Part Number']}.png",
+                        mime="image/png",
+                        key=f"dl_loc_{idx}"
+                    )
+                st.markdown("---")
+    else:
+        st.warning("No items found matching the selected location filters.")
 
-# --- TAB 3: PROJECT SEARCH ---
+# --- TAB 3: PROJECT & PO SEARCH ---
 with tab3:
-    st.header("Search Database by Project Under")
+    st.header("Search Database by Project Under or PO Number")
+    
     col_p1, col_p2 = st.columns(2)
+    col_po1, col_po2 = st.columns(2)
     
     known_projects = ["Select a Project..."] + sorted([p for p in active_df['Project Under'].dropna().astype(str).unique() if p.strip()])
     selected_proj_dropdown = col_p1.selectbox("Select from existing projects:", known_projects, key="proj_search_select")
     proj_search_query = col_p2.text_input("Or TYPE a project name:", key="proj_search_input").strip()
     
-    target_project = ""
+    known_pos = ["Select a PO Number..."] + sorted([po for po in active_df['PO Number'].dropna().astype(str).unique() if po.strip()])
+    selected_po_dropdown = col_po1.selectbox("Select from existing PO numbers:", known_pos, key="po_search_select")
+    po_search_query = col_po2.text_input("Or TYPE a PO number:", key="po_search_input").strip()
+    
+    results = active_df.copy()
+    has_filter = False
+    
     if proj_search_query:
-        target_project = proj_search_query
+        norm_p = normalize_str(proj_search_query)
+        results = results[results['Project Under'].apply(normalize_str).str.contains(norm_p, na=False)]
+        has_filter = True
     elif selected_proj_dropdown != "Select a Project...":
-        target_project = selected_proj_dropdown
+        results = results[results['Project Under'] == selected_proj_dropdown]
+        has_filter = True
         
-    if target_project:
-        results = active_df[active_df['Project Under'].str.contains(target_project, case=False, na=False)]
+    if po_search_query:
+        norm_po = normalize_str(po_search_query)
+        results = results[results['PO Number'].apply(normalize_str).str.contains(norm_po, na=False)]
+        has_filter = True
+    elif selected_po_dropdown != "Select a PO Number...":
+        results = results[results['PO Number'].astype(str) == selected_po_dropdown]
+        has_filter = True
         
+    if has_filter:
         if not results.empty:
-            st.success(f"Found {len(results)} item(s) registered under project '{target_project}':")
+            st.success(f"Found {len(results)} matching item(s):")
             for idx, row in results.iterrows():
                 with st.container():
-                    col1, col2, col3, col4, col5, col6, col7 = st.columns([1.8, 2.2, 1.5, 1.2, 1.2, 1.5, 1.2])
+                    col1, col2, col3, col4, col5, col6, col7 = st.columns([1.8, 2.2, 1.3, 1.0, 1.5, 1.3, 1.2])
                     
                     with col1:
                         st.caption("Part Number")
@@ -311,11 +468,12 @@ with tab3:
                         st.caption("Quantity")
                         st.markdown(f"### {int(row['Qty on Hand'])}")
                     with col5:
+                        loc_cat = get_location_category(str(row['Location']))
                         st.caption("Location")
-                        st.markdown(f"### [{row['Location']}]")
+                        st.markdown(f"### [{row['Location']}] *({loc_cat})*")
                     with col6:
-                        st.caption("Project Under")
-                        st.markdown(f"### {row['Project Under']}")
+                        st.caption("Project / PO#")
+                        st.markdown(f"**Proj:** {row['Project Under']}\n\n**PO#:** {row['PO Number'] if row.get('PO Number') else 'N/A'}")
                     with col7:
                         st.caption("Min Qty Limit")
                         st.markdown(f"### {int(row['Min Qty']) if pd.notna(row['Min Qty']) else 0}")
@@ -332,9 +490,9 @@ with tab3:
                         )
                     st.markdown("---")
         else:
-            st.warning(f"No items currently registered under project '{target_project}'.")
+            st.warning("No items currently registered matching selected Project or PO criteria.")
 
-# --- TAB 4: ADD INVENTORY WITH BETTER SEARCH ---
+# --- TAB 4: ADD INVENTORY WITH CONFIRMATION ---
 with tab4:
     st.header("Receive / Add Stock")
     
@@ -350,7 +508,6 @@ with tab4:
     show_new_form = False
     
     if add_query:
-        # Filter active items based on dropdown filters first
         filtered_add = active_df.copy()
         if selected_proj_add != "All Projects":
             filtered_add = filtered_add[filtered_add['Project Under'] == selected_proj_add]
@@ -382,8 +539,12 @@ with tab4:
             new_type = selected_type_opt
             
         new_qty = st.number_input("Initial Quantity:", min_value=1, step=10, value=10)
-        new_loc = st.text_input("Storage Location (Allowed: A1-A3, B1-B3, C1-C4, D1-D4, E1-E4, F1-F3, G1-G3):")
-        new_proj = st.text_input("Project Under:")
+        new_loc = st.text_input("Storage Location (Downstairs: A1-F3, Upstairs: G1-I3):")
+        
+        col_n1, col_n2 = st.columns(2)
+        new_proj = col_n1.text_input("Project Under:")
+        new_po = col_n2.text_input("PO Number Ordered Under (Optional):")
+        
         new_min_qty = st.number_input("Minimum Quantity Alert Threshold (Optional, set 0 for None):", min_value=0, step=10, value=0)
         
         if st.button("Save Brand New Item"):
@@ -394,24 +555,13 @@ with tab4:
             elif not new_type:
                 st.error("Part Type is required.")
             elif not valid:
-                st.error("Invalid Location! Format must be Rack A-G (Shelves 1-3, or 1-4 for C, D, E). Examples: C4, F2")
+                st.error("Invalid Location! Allowed Downstairs: A1-A3, B1-B3, C1-C4, D1-D4, E1-E4, F1-F3 | Allowed Upstairs: G1-G3, H1-H3, I1-I3")
             else:
-                supabase.table("Inventory").insert({
-                    "Part Number": str(new_num),
-                    "Part Name": str(new_name),
-                    "Part Type": str(new_type),
-                    "Qty on Hand": int(new_qty),
-                    "Location": str(formatted_loc),
-                    "Project Under": str(new_proj),
-                    "Min Qty": int(new_min_qty)
-                }).execute()
-                log_event("Added", new_num, new_name, f"Registered new item. Initial Qty: {new_qty} at {formatted_loc}.", project_under=new_proj, part_type=new_type)
-                st.success(f"Successfully registered item `{new_num}`!")
-                st.rerun()
+                confirm_add_dialog(new_num, new_name, new_qty, formatted_loc, new_proj, new_type, new_po, True, min_qty=new_min_qty)
 
     elif not results.empty:
         st.success(f"Found {len(results)} potential matching item(s):")
-        options = [f"{row['Part Name']} (#{row['Part Number']}) | Type: {row['Part Type']} | Proj: {row['Project Under']} | Qty: {row['Qty on Hand']} | Loc: {row['Location']}" for idx, row in results.iterrows()]
+        options = [f"{row['Part Name']} (#{row['Part Number']}) | Type: {row['Part Type']} | Proj: {row['Project Under']} | PO#: {row['PO Number']} | Qty: {row['Qty on Hand']} | Loc: {row['Location']}" for idx, row in results.iterrows()]
         choice = st.selectbox("Select the exact item row to add stock to:", options, key="add_select")
         row_idx = results.index[options.index(choice)]
         
@@ -420,20 +570,16 @@ with tab4:
         
         if st.button("Confirm Addition"):
             target_pnum = active_df.at[row_idx, 'Part Number']
+            target_pname = active_df.at[row_idx, 'Part Name']
             target_loc = active_df.at[row_idx, 'Location']
             target_proj = active_df.at[row_idx, 'Project Under']
-            new_total = int(active_df.at[row_idx, 'Qty on Hand']) + amt_to_add
+            target_po = active_df.at[row_idx, 'PO Number']
+            target_ptype = active_df.at[row_idx, 'Part Type']
+            current_qty = int(active_df.at[row_idx, 'Qty on Hand'])
             
-            supabase.table("Inventory").update({
-                "Qty on Hand": new_total,
-                "Min Qty": int(new_min_qty)
-            }).eq("Part Number", target_pnum).eq("Location", target_loc).eq("Project Under", target_proj).execute()
-            
-            log_event("Added", target_pnum, active_df.at[row_idx, 'Part Name'], f"Added {amt_to_add} units. New Total: {new_total}.", project_under=target_proj, part_type=active_df.at[row_idx, 'Part Type'])
-            st.success("Stock updated permanently!")
-            st.rerun()
+            confirm_add_dialog(target_pnum, target_pname, amt_to_add, target_loc, target_proj, target_ptype, target_po, False, current_qty=current_qty, min_qty=new_min_qty)
 
-# --- TAB 5: TAKE INVENTORY WITH BETTER SEARCH ---
+# --- TAB 5: TAKE INVENTORY WITH CONFIRMATION ---
 with tab5:
     st.header("Remove / Assemble Stock")
     
@@ -460,7 +606,7 @@ with tab5:
     if results.empty:
         st.warning("No parts found matching selected search query or filters.")
     else:
-        options = [f"{row['Part Name']} (#{row['Part Number']}) | Type: {row['Part Type']} | Proj: {row['Project Under']} | Qty: {row['Qty on Hand']} | Loc: {row['Location']}" for idx, row in results.iterrows()]
+        options = [f"{row['Part Name']} (#{row['Part Number']}) | Type: {row['Part Type']} | Proj: {row['Project Under']} | PO#: {row['PO Number']} | Qty: {row['Qty on Hand']} | Loc: {row['Location']}" for idx, row in results.iterrows()]
         choice = st.selectbox("Select the exact item row you are pulling stock from:", options, key="take_select")
         row_idx = results.index[options.index(choice)]
         
@@ -473,24 +619,10 @@ with tab5:
             loc_name = active_df.at[row_idx, 'Location']
             p_type = active_df.at[row_idx, 'Part Type']
             min_threshold = int(active_df.at[row_idx, 'Min Qty'])
-            new_stock = current_stock - amt_to_sub
             
-            if new_stock <= 0:
-                supabase.table("Inventory").update({"Qty on Hand": 0}).eq("Part Number", part_num).eq("Location", loc_name).eq("Project Under", proj_name).execute()
-                log_event("Removed", part_num, part_name, f"Removed {amt_to_sub} units. Stock hit 0.", project_under=proj_name, part_type=p_type)
-                st.toast(f"🚨 ALERT: {part_name} has hit 0 and is completely out of stock!", icon="🚨")
-                st.success("Item stock dropped to 0!")
-            else:
-                supabase.table("Inventory").update({"Qty on Hand": new_stock}).eq("Part Number", part_num).eq("Location", loc_name).eq("Project Under", proj_name).execute()
-                log_event("Removed", part_num, part_name, f"Removed {amt_to_sub} units. Remaining: {new_stock}", project_under=proj_name, part_type=p_type)
-                
-                if new_stock <= min_threshold and min_threshold > 0:
-                    st.warning(f"⚠️ LOW STOCK ALERT: {part_name} is down to {new_stock} units!")
-                else:
-                    st.success(f"Stock removed! Remaining units: {new_stock}")
-            st.rerun()
+            confirm_take_dialog(part_num, part_name, amt_to_sub, loc_name, proj_name, p_type, current_stock, min_threshold)
 
-# --- TAB 6: ALTER PART WITH BETTER SEARCH ---
+# --- TAB 6: ALTER PART WITH CONFIRMATION ---
 with tab6:
     st.header("Alter Part Attributes")
     alter_query = st.text_input("Type any part number, name, or character fragment to ALTER:", key="alter_input").strip()
@@ -501,7 +633,7 @@ with tab6:
         if results.empty:
             st.error("No parts found matching your query.")
         else:
-            options = [f"{row['Part Name']} (#{row['Part Number']}) | Proj: {row['Project Under']} | Loc: {row['Location']}" for idx, row in results.iterrows()]
+            options = [f"{row['Part Name']} (#{row['Part Number']}) | Proj: {row['Project Under']} | PO#: {row['PO Number']} | Loc: {row['Location']}" for idx, row in results.iterrows()]
             choice = st.selectbox("Select the exact item to edit:", options, key="alter_select")
             row_idx = results.index[options.index(choice)]
             
@@ -513,8 +645,9 @@ with tab6:
             
             updated_name = st.text_input("Part Name:", value=str(active_df.at[row_idx, 'Part Name']))
             
-            col_a1, col_a2 = st.columns(2)
+            col_a1, col_a2, col_a3 = st.columns(3)
             updated_project = col_a1.text_input("Project Under:", value=str(active_df.at[row_idx, 'Project Under']))
+            updated_po = col_a2.text_input("PO Number Ordered Under:", value=str(active_df.at[row_idx, 'PO Number']) if pd.notna(active_df.at[row_idx, 'PO Number']) else "")
             
             current_type = str(active_df.at[row_idx, 'Part Type']) if pd.notna(active_df.at[row_idx, 'Part Type']) else ""
             known_types = sorted([t for t in active_df['Part Type'].dropna().astype(str).unique() if t.strip()])
@@ -525,10 +658,10 @@ with tab6:
             type_options = known_types + ["+ Add New Part Type"]
             
             default_index = type_options.index(current_type) if current_type in type_options else 0
-            selected_type_opt = col_a2.selectbox("Part Type", options=type_options, index=default_index, key="alter_part_type_select")
+            selected_type_opt = col_a3.selectbox("Part Type", options=type_options, index=default_index, key="alter_part_type_select")
             
             if selected_type_opt == "+ Add New Part Type":
-                updated_type = col_a2.text_input("Enter New Part Type Name:", key="alter_part_type_custom").strip()
+                updated_type = col_a3.text_input("Enter New Part Type Name:", key="alter_part_type_custom").strip()
             else:
                 updated_type = selected_type_opt
             
@@ -536,17 +669,9 @@ with tab6:
                 if not updated_type:
                     st.error("Part Type is required.")
                 else:
-                    supabase.table("Inventory").update({
-                        "Part Name": str(updated_name),
-                        "Project Under": str(updated_project),
-                        "Part Type": str(updated_type)
-                    }).eq("Part Number", orig_pnum).eq("Location", orig_loc).eq("Project Under", orig_proj).execute()
-                    
-                    log_event("Altered", orig_pnum, updated_name, f"Updated Attributes.", project_under=updated_project, part_type=updated_type)
-                    st.success("Part attributes successfully updated!")
-                    st.rerun()
+                    confirm_alter_dialog(orig_pnum, orig_loc, orig_proj, updated_name, updated_project, updated_po, updated_type)
 
-# --- TAB 7: CHANGE LOCATION WITH BETTER SEARCH ---
+# --- TAB 7: CHANGE LOCATION ---
 with tab7:
     st.header("Move Parts to a New Location")
     loc_query = st.text_input("Type any part number, name, or character fragment to change its LOCATION:", key="loc_input").strip()
@@ -561,11 +686,11 @@ with tab7:
             choice = st.selectbox("Select the item listing you want to move:", options, key="loc_select")
             row_idx = results.index[options.index(choice)]
             
-            new_location = st.text_input(f"Enter new location code (Allowed: A1-A3, B1-B3, C1-C4, D1-D4, E1-E4, F1-F3, G1-G3):")
+            new_location = st.text_input("Enter new location code (Downstairs: A1-F3, Upstairs: G1-I3):")
             if st.button("Update Location"):
                 valid, formatted_loc = is_valid_location(new_location)
                 if not valid:
-                    st.error("Invalid Location! Examples: C4, F1")
+                    st.error("Invalid Location! Allowed Downstairs: A1-A3, B1-B3, C1-C4, D1-D4, E1-E4, F1-F3 | Allowed Upstairs: G1-G3, H1-H3, I1-I3")
                 else:
                     old_loc = active_df.at[row_idx, 'Location']
                     part_num = active_df.at[row_idx, 'Part Number']
@@ -575,10 +700,10 @@ with tab7:
                     
                     supabase.table("Inventory").update({
                         "Location": formatted_loc
-                    }).eq("Part Number", part_num).eq("Location", old_loc).eq("Project Under", proj_name).execute()
+                    }).eq("Part Number", str(part_num)).execute()
                     
                     log_event("Moved", part_num, part_name, f"Moved from {old_loc} to {formatted_loc}", project_under=proj_name, part_type=p_type)
-                    st.success(f"Location updated to [{formatted_loc}]!")
+                    st.success(f"Location updated to [{formatted_loc}] ({get_location_category(formatted_loc)})!")
                     st.rerun()
 
 # --- TAB 8: LOG HISTORY WITH FILTERS ---
@@ -619,12 +744,12 @@ low_stock_df = active_df[low_stock_mask].copy()
 if low_stock_df.empty:
     st.sidebar.success("No active low/out-of-stock items needing restock.")
 else:
-    display_df = low_stock_df[['Part Name', 'Part Number', 'Project Under']].copy()
+    display_df = low_stock_df[['Part Name', 'Part Number', 'Project Under', 'PO Number']].copy()
     display_df.insert(0, "Disregard", False)
     
-    copy_text_lines = ["Product Name\tPart Number\tProject Under"]
+    copy_text_lines = ["Product Name\tPart Number\tProject Under\tPO Number"]
     for _, r in display_df.iterrows():
-        copy_text_lines.append(f"{r['Part Name']}\t{r['Part Number']}\t{r['Project Under']}")
+        copy_text_lines.append(f"{r['Part Name']}\t{r['Part Number']}\t{r['Project Under']}\t{r['PO Number']}")
     raw_copy_str = "\\n".join(copy_text_lines).replace("'", "\\'")
     
     with st.sidebar:
@@ -669,7 +794,8 @@ else:
             ),
             "Part Name": st.column_config.TextColumn("Product Name", disabled=True),
             "Part Number": st.column_config.TextColumn("Part Number", disabled=True),
-            "Project Under": st.column_config.TextColumn("Project Under", disabled=True)
+            "Project Under": st.column_config.TextColumn("Project Under", disabled=True),
+            "PO Number": st.column_config.TextColumn("PO#", disabled=True)
         },
         key="low_stock_editor"
     )
@@ -677,10 +803,7 @@ else:
     disregarded_rows = edited_df[edited_df['Disregard'] == True]
     if not disregarded_rows.empty:
         if st.sidebar.button("Confirm Disregard Selected"):
-            for _, r in disregarded_rows.iterrows():
-                disregard_item(r['Part Number'], r['Project Under'])
-            st.sidebar.success("Item(s) disregarded and removed from main table!")
-            st.rerun()
+            confirm_disregard_dialog(disregarded_rows)
 
 # --- Sidebar Footer ---
 st.sidebar.markdown("---")
