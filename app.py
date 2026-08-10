@@ -20,10 +20,8 @@ def load_permanent_data():
         response = supabase.table("Inventory").select("*").execute()
         df = pd.DataFrame(response.data)
         if df.empty:
-            return pd.DataFrame(columns=['Part Number', 'Part Name', 'Part Type', 'Qty on Hand', 'Location', 'Project Under', 'Min Qty', 'PO Number'])
+            return pd.DataFrame(columns=['id', 'Part Number', 'Part Name', 'Part Type', 'Qty on Hand', 'Location', 'Project Under', 'Min Qty', 'PO Number'])
         
-        if 'id' in df.columns:
-            df = df.drop(columns=['id'])
         if 'Project' in df.columns and 'Project Under' not in df.columns:
             df.rename(columns={'Project': 'Project Under'}, inplace=True)
             
@@ -38,19 +36,19 @@ def load_permanent_data():
         return df
     except Exception as e:
         st.error(f"Error loading inventory: {e}")
-        return pd.DataFrame(columns=['Part Number', 'Part Name', 'Part Type', 'Qty on Hand', 'Location', 'Project Under', 'Min Qty', 'PO Number'])
+        return pd.DataFrame(columns=['id', 'Part Number', 'Part Name', 'Part Type', 'Qty on Hand', 'Location', 'Project Under', 'Min Qty', 'PO Number'])
 
 def load_disregarded_items():
     try:
         response = supabase.table("Disregarded_Items").select("*").execute()
         df = pd.DataFrame(response.data)
         if df.empty:
-            return []
-        return df['Part Number'].astype(str).tolist()
+            return pd.DataFrame(columns=['Part Number', 'Project Under', 'Location'])
+        return df
     except Exception:
-        return []
+        return pd.DataFrame(columns=['Part Number', 'Project Under', 'Location'])
 
-def disregard_item(part_num, project_under):
+def disregard_item(part_num, project_under, location=""):
     try:
         supabase.table("Disregarded_Items").insert({
             "Part Number": str(part_num),
@@ -60,9 +58,12 @@ def disregard_item(part_num, project_under):
     except Exception as e:
         st.error(f"Error disregarding item: {e}")
 
-def remove_from_disregarded(part_num):
+def remove_from_disregarded(part_num, project_under=""):
     try:
-        supabase.table("Disregarded_Items").delete().eq("Part Number", str(part_num)).execute()
+        query = supabase.table("Disregarded_Items").delete().eq("Part Number", str(part_num))
+        if project_under:
+            query = query.eq("Project Under", str(project_under))
+        query.execute()
         st.cache_data.clear()
     except Exception as e:
         st.error(f"Error restoring disregarded item: {e}")
@@ -183,6 +184,7 @@ def show_confirmation_dialog():
         amt, loc, proj = action_data["amt"], action_data["loc"], action_data["proj"]
         ptype, po, min_qty = action_data["ptype"], action_data["po"], action_data["min_qty"]
         current_qty = action_data.get("current_qty", 0)
+        target_id = action_data.get("target_id")
 
         if is_new:
             st.write(f"Are you sure you want to register brand new item **{pname}** (`{pnum}`)?")
@@ -196,7 +198,7 @@ def show_confirmation_dialog():
 
         col1, col2 = st.columns(2)
         if col1.button("Yes, Confirm Add", type="primary"):
-            remove_from_disregarded(pnum)
+            remove_from_disregarded(pnum, proj)
             if is_new:
                 supabase.table("Inventory").insert({
                     "Part Number": str(pnum),
@@ -210,12 +212,17 @@ def show_confirmation_dialog():
                 }).execute()
                 log_event("Added", pnum, pname, f"Registered new item. Initial Qty: {amt} at {loc}. PO#: {po}", project_under=proj, part_type=ptype)
             else:
-                supabase.table("Inventory").update({
+                query = supabase.table("Inventory").update({
                     "Qty on Hand": current_qty + amt,
                     "Min Qty": int(min_qty),
                     "Location": str(loc),
                     "Project Under": str(proj)
-                }).eq("Part Number", str(pnum)).execute()
+                })
+                if target_id is not None and pd.notna(target_id):
+                    query = query.eq("id", target_id)
+                else:
+                    query = query.eq("Part Number", str(pnum)).eq("Location", str(loc)).eq("Project Under", str(proj))
+                query.execute()
                 log_event("Added", pnum, pname, f"Added {amt} units. New Total: {current_qty + amt}.", project_under=proj, part_type=ptype)
             
             st.session_state["pending_action"] = None
@@ -230,6 +237,7 @@ def show_confirmation_dialog():
         pnum, pname = action_data["pnum"], action_data["pname"]
         amt, loc, proj = action_data["amt"], action_data["loc"], action_data["proj"]
         ptype, current_qty, min_qty = action_data["ptype"], action_data["current_qty"], action_data["min_qty"]
+        target_id = action_data.get("target_id")
         new_stock = current_qty - amt
 
         st.write(f"Are you sure you want to remove **{amt}** units of **{pname}** (`{pnum}`)?")
@@ -238,14 +246,18 @@ def show_confirmation_dialog():
 
         col1, col2 = st.columns(2)
         if col1.button("Yes, Confirm Removal", type="primary"):
+            query = supabase.table("Inventory").update({"Qty on Hand": max(0, new_stock)})
+            if target_id is not None and pd.notna(target_id):
+                query = query.eq("id", target_id)
+            else:
+                query = query.eq("Part Number", str(pnum)).eq("Location", str(loc)).eq("Project Under", str(proj))
+            query.execute()
+
             if new_stock <= 0:
-                supabase.table("Inventory").update({"Qty on Hand": 0}).eq("Part Number", str(pnum)).execute()
                 log_event("Removed", pnum, pname, f"Removed {amt} units. Stock hit 0.", project_under=proj, part_type=ptype)
                 st.toast(f"🚨 ALERT: {pname} has hit 0 and is completely out of stock!", icon="🚨")
             else:
-                supabase.table("Inventory").update({"Qty on Hand": new_stock}).eq("Part Number", str(pnum)).execute()
-                log_event("Removed", pnum, pname, f"Removed {amt} units. Remaining: {new_stock}", project_under=proj, part_type=ptype)
-                
+                log_event("Removed", pnum, pname, f"Removed {amt} units. Remaining: {new_stock}", project_under=proj, part_type=p_type)
                 if new_stock <= min_qty and min_qty > 0:
                     st.warning(f"⚠️ LOW STOCK ALERT: {pname} is down to {new_stock} units!")
             
@@ -261,6 +273,7 @@ def show_confirmation_dialog():
         orig_pnum = action_data["orig_pnum"]
         new_name, new_proj = action_data["new_name"], action_data["new_proj"]
         new_po, new_type = action_data["new_po"], action_data["new_type"]
+        target_id = action_data.get("target_id")
 
         st.write(f"Are you sure you want to update attributes for **{new_name}** (`{orig_pnum}`)?")
         st.write(f"- **Project Under:** {new_proj}")
@@ -269,12 +282,17 @@ def show_confirmation_dialog():
 
         col1, col2 = st.columns(2)
         if col1.button("Yes, Save Changes", type="primary"):
-            supabase.table("Inventory").update({
+            query = supabase.table("Inventory").update({
                 "Part Name": str(new_name),
                 "Project Under": str(new_proj),
                 "PO Number": str(new_po),
                 "Part Type": str(new_type)
-            }).eq("Part Number", str(orig_pnum)).execute()
+            })
+            if target_id is not None and pd.notna(target_id):
+                query = query.eq("id", target_id)
+            else:
+                query = query.eq("Part Number", str(orig_pnum))
+            query.execute()
             
             log_event("Altered", orig_pnum, new_name, f"Updated Attributes (PO#: {new_po}).", project_under=new_proj, part_type=new_type)
             st.session_state["pending_action"] = None
@@ -294,9 +312,9 @@ def show_confirmation_dialog():
         col1, col2 = st.columns(2)
         if col1.button("Yes, Confirm Disregard", type="primary"):
             for _, r in disregarded_rows.iterrows():
-                disregard_item(r['Part Number'], r['Project Under'])
+                disregard_item(r['Part Number'], r['Project Under'], r.get('Location', ''))
             st.session_state["pending_action"] = None
-            st.sidebar.success("Item(s) disregarded!")
+            st.success("Item(s) disregarded successfully!")
             st.rerun()
 
         if col2.button("No, Cancel"):
@@ -330,11 +348,12 @@ if not st.session_state["authenticated"]:
 
 st.title("Panel Shop Inventory System")
 df = load_permanent_data()
-disregarded_list = load_disregarded_items()
+disregarded_df = load_disregarded_items()
 
 active_df = df.copy()
-if disregarded_list:
-    active_df = active_df[~active_df['Part Number'].astype(str).isin(disregarded_list)]
+if not disregarded_df.empty:
+    disregarded_pairs = set(zip(disregarded_df['Part Number'].astype(str), disregarded_df['Project Under'].astype(str)))
+    active_df = active_df[~active_df.apply(lambda r: (str(r['Part Number']), str(r['Project Under'])) in disregarded_pairs, axis=1)]
 
 tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "Scan Search", 
@@ -619,7 +638,7 @@ with tab4:
 
     elif not results.empty and add_query:
         st.success(f"Found {len(results)} matching item(s):")
-        options = [f"{row['Part Name']} (#{row['Part Number']}) | Type: {row['Part Type']} | Proj: {row['Project Under']} | PO#: {row['PO Number']} | Qty: {row['Qty on Hand']} | Loc: {row['Location']}" for idx, row in results.iterrows()]
+        options = [f"{row['Part Name']} (#{row['Part Number']}) | Type: {row['Part Type']} | Proj: {row['Project Under']} | PO#: {row['PO Number']} | Qty: {row['Qty on Hand']} | Loc: {row['Location']} (ID: {row.get('id', 'N/A')})" for idx, row in results.iterrows()]
         choice = st.selectbox("Select the exact item row to add stock to:", options, key="add_select")
         row_idx = results.index[options.index(choice)]
         
@@ -627,6 +646,7 @@ with tab4:
         new_min_qty = st.number_input(f"Update Minimum Quantity Alert Level (Current: {active_df.at[row_idx, 'Min Qty']}):", min_value=0, step=10, value=int(active_df.at[row_idx, 'Min Qty']))
         
         if st.button("Confirm Addition"):
+            target_id = active_df.at[row_idx, 'id'] if 'id' in active_df.columns else None
             target_pnum = active_df.at[row_idx, 'Part Number']
             target_pname = active_df.at[row_idx, 'Part Name']
             target_loc = active_df.at[row_idx, 'Location']
@@ -638,6 +658,7 @@ with tab4:
             st.session_state["pending_action"] = {
                 "type": "add",
                 "is_new": False,
+                "target_id": target_id,
                 "pnum": target_pnum,
                 "pname": target_pname,
                 "amt": amt_to_add,
@@ -672,12 +693,13 @@ with tab5:
     if results.empty:
         st.warning("No parts found matching selected search query or filters.")
     else:
-        options = [f"{row['Part Name']} (#{row['Part Number']}) | Type: {row['Part Type']} | Proj: {row['Project Under']} | PO#: {row['PO Number']} | Qty: {row['Qty on Hand']} | Loc: {row['Location']}" for idx, row in results.iterrows()]
+        options = [f"{row['Part Name']} (#{row['Part Number']}) | Type: {row['Part Type']} | Proj: {row['Project Under']} | PO#: {row['PO Number']} | Qty: {row['Qty on Hand']} | Loc: {row['Location']} (ID: {row.get('id', 'N/A')})" for idx, row in results.iterrows()]
         choice = st.selectbox("Select the exact item row you are pulling stock from:", options, key="take_select")
         row_idx = results.index[options.index(choice)]
         
         amt_to_sub = st.number_input("How many units are you taking for assembly?", min_value=1, step=10, value=10, key="take_amt")
         if st.button("Confirm Removal"):
+            target_id = active_df.at[row_idx, 'id'] if 'id' in active_df.columns else None
             current_stock = int(active_df.at[row_idx, 'Qty on Hand'])
             part_num = active_df.at[row_idx, 'Part Number']
             part_name = active_df.at[row_idx, 'Part Name']
@@ -688,6 +710,7 @@ with tab5:
             
             st.session_state["pending_action"] = {
                 "type": "take",
+                "target_id": target_id,
                 "pnum": part_num,
                 "pname": part_name,
                 "amt": amt_to_sub,
@@ -721,12 +744,13 @@ with tab6:
     if results.empty:
         st.error("No parts found matching your query or filters.")
     else:
-        options = [f"{row['Part Name']} (#{row['Part Number']}) | Proj: {row['Project Under']} | PO#: {row['PO Number']} | Loc: {row['Location']}" for idx, row in results.iterrows()]
+        options = [f"{row['Part Name']} (#{row['Part Number']}) | Proj: {row['Project Under']} | PO#: {row['PO Number']} | Loc: {row['Location']} (ID: {row.get('id', 'N/A')})" for idx, row in results.iterrows()]
         choice = st.selectbox("Select the exact item to edit:", options, key="alter_select")
         row_idx = results.index[options.index(choice)]
         
         st.subheader(f"Editing Part: {active_df.at[row_idx, 'Part Number']}")
         
+        target_id = active_df.at[row_idx, 'id'] if 'id' in active_df.columns else None
         orig_pnum = active_df.at[row_idx, 'Part Number']
         orig_loc = active_df.at[row_idx, 'Location']
         orig_proj = active_df.at[row_idx, 'Project Under']
@@ -759,6 +783,7 @@ with tab6:
             else:
                 st.session_state["pending_action"] = {
                     "type": "alter",
+                    "target_id": target_id,
                     "orig_pnum": orig_pnum,
                     "orig_loc": orig_loc,
                     "orig_proj": orig_proj,
@@ -780,7 +805,7 @@ with tab7:
         if results.empty:
             st.error("No parts found matching your query.")
         else:
-            options = [f"{row['Part Name']} (#{row['Part Number']}) | Proj: {row['Project Under']} | Current Loc: {row['Location']}" for idx, row in results.iterrows()]
+            options = [f"{row['Part Name']} (#{row['Part Number']}) | Proj: {row['Project Under']} | Current Loc: {row['Location']} (ID: {row.get('id', 'N/A')})" for idx, row in results.iterrows()]
             choice = st.selectbox("Select the item listing you want to move:", options, key="loc_select")
             row_idx = results.index[options.index(choice)]
             
@@ -790,15 +815,19 @@ with tab7:
                 if not valid:
                     st.error("Invalid Location! Allowed Downstairs: A1-A3, B1-B3, C1-C4, D1-D4, E1-E4, F1-F3 | Allowed Upstairs: G1-G3, H1-H3, I1-I3")
                 else:
+                    target_id = active_df.at[row_idx, 'id'] if 'id' in active_df.columns else None
                     old_loc = active_df.at[row_idx, 'Location']
                     part_num = active_df.at[row_idx, 'Part Number']
                     part_name = active_df.at[row_idx, 'Part Name']
                     proj_name = active_df.at[row_idx, 'Project Under']
                     p_type = active_df.at[row_idx, 'Part Type']
                     
-                    supabase.table("Inventory").update({
-                        "Location": formatted_loc
-                    }).eq("Part Number", str(part_num)).execute()
+                    query = supabase.table("Inventory").update({"Location": formatted_loc})
+                    if target_id is not None and pd.notna(target_id):
+                        query = query.eq("id", target_id)
+                    else:
+                        query = query.eq("Part Number", str(part_num)).eq("Location", str(old_loc)).eq("Project Under", str(proj_name))
+                    query.execute()
                     
                     log_event("Moved", part_num, part_name, f"Moved from {old_loc} to {formatted_loc}", project_under=proj_name, part_type=p_type)
                     st.success(f"Location updated to [{formatted_loc}] ({get_location_category(formatted_loc)})!")
@@ -842,12 +871,14 @@ low_stock_df = active_df[low_stock_mask].copy()
 if low_stock_df.empty:
     st.sidebar.success("No active low/out-of-stock items needing restock.")
 else:
-    display_df = low_stock_df[['Part Name', 'Part Number', 'Project Under', 'PO Number']].copy()
+    display_df = low_stock_df[['Part Name', 'Part Number', 'Project Under', 'PO Number', 'Location']].copy()
+    if 'id' in low_stock_df.columns:
+        display_df['id'] = low_stock_df['id']
     display_df.insert(0, "Disregard", False)
     
-    copy_text_lines = ["Product Name\tPart Number\tProject Under\tPO Number"]
+    copy_text_lines = ["Product Name\tPart Number\tProject Under\tPO Number\tLocation"]
     for _, r in display_df.iterrows():
-        copy_text_lines.append(f"{r['Part Name']}\t{r['Part Number']}\t{r['Project Under']}\t{r['PO Number']}")
+        copy_text_lines.append(f"{r['Part Name']}\t{r['Part Number']}\t{r['Project Under']}\t{r['PO Number']}\t{r['Location']}")
     raw_copy_str = "\\n".join(copy_text_lines).replace("'", "\\'")
     
     with st.sidebar:
@@ -893,7 +924,9 @@ else:
             "Part Name": st.column_config.TextColumn("Product Name", disabled=True),
             "Part Number": st.column_config.TextColumn("Part Number", disabled=True),
             "Project Under": st.column_config.TextColumn("Project Under", disabled=True),
-            "PO Number": st.column_config.TextColumn("PO#", disabled=True)
+            "PO Number": st.column_config.TextColumn("PO#", disabled=True),
+            "Location": st.column_config.TextColumn("Loc", disabled=True),
+            "id": None
         },
         key="low_stock_editor"
     )
