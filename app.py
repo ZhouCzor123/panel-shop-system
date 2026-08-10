@@ -137,11 +137,11 @@ def highlight_shortages(row):
         return ['background-color: #ffcccc; color: #900000; font-weight: bold'] * len(row)
     return [''] * len(row)
 
-# Space and Dash Insensitive Search Helper Function
+# Strict Space, Dash, Slash & Case Insensitive Normalization
 def normalize_str(val):
     if pd.isna(val):
         return ""
-    return re.sub(r'[\s\-_]+', '', str(val)).lower()
+    return re.sub(r'[\s\-_/\\.]+', '', str(val)).lower()
 
 def fuzzy_search_df(dataframe, query):
     if not query:
@@ -157,109 +157,155 @@ def fuzzy_search_df(dataframe, query):
     )
     return dataframe[mask]
 
-# --- CONFIRMATION DIALOGS ---
-@st.dialog("Confirm Addition")
-def confirm_add_dialog(pnum, pname, amt, loc, proj, ptype, po, is_new, current_qty=0, min_qty=0):
-    if is_new:
-        st.write(f"Are you sure you want to register brand new item **{pname}** (`{pnum}`)?")
-        st.write(f"- **Initial Quantity:** {amt}")
-        st.write(f"- **Location:** {loc}")
-        st.write(f"- **Project:** {proj}")
-    else:
-        st.write(f"Are you sure you want to add **{amt}** units to **{pname}** (`{pnum}`)?")
-        st.write(f"- **New Total Quantity:** {current_qty + amt}")
+def apply_category_filters(dataframe, proj_filter, type_filter):
+    filtered_df = dataframe.copy()
+    if proj_filter and proj_filter != "All Projects":
+        filtered_df = filtered_df[filtered_df['Project Under'] == proj_filter]
+    if type_filter and type_filter != "All Part Types":
+        filtered_df = filtered_df[filtered_df['Part Type'] == type_filter]
+    return filtered_df
 
-    col1, col2 = st.columns(2)
-    if col1.button("Yes, Confirm Add", type="primary"):
-        remove_from_disregarded(pnum)
+# --- STATE-BASED VERIFICATION DIALOGS ---
+if "pending_action" not in st.session_state:
+    st.session_state["pending_action"] = None
+
+@st.dialog("Confirm Action")
+def show_confirmation_dialog():
+    action_data = st.session_state.get("pending_action")
+    if not action_data:
+        st.rerun()
+
+    action_type = action_data.get("type")
+
+    if action_type == "add":
+        is_new = action_data["is_new"]
+        pnum, pname = action_data["pnum"], action_data["pname"]
+        amt, loc, proj = action_data["amt"], action_data["loc"], action_data["proj"]
+        ptype, po, min_qty = action_data["ptype"], action_data["po"], action_data["min_qty"]
+        current_qty = action_data.get("current_qty", 0)
+
         if is_new:
-            supabase.table("Inventory").insert({
-                "Part Number": str(pnum),
-                "Part Name": str(pname),
-                "Part Type": str(ptype),
-                "Qty on Hand": int(amt),
-                "Location": str(loc),
-                "Project Under": str(proj),
-                "PO Number": str(po),
-                "Min Qty": int(min_qty)
-            }).execute()
-            log_event("Added", pnum, pname, f"Registered new item. Initial Qty: {amt} at {loc}. PO#: {po}", project_under=proj, part_type=ptype)
+            st.write(f"Are you sure you want to register brand new item **{pname}** (`{pnum}`)?")
+            st.write(f"- **Initial Quantity:** {amt}")
+            st.write(f"- **Location:** {loc}")
+            st.write(f"- **Project:** {proj}")
         else:
-            # Flexible update by Part Number to prevent silent update failures
-            supabase.table("Inventory").update({
-                "Qty on Hand": current_qty + amt,
-                "Min Qty": int(min_qty),
-                "Location": str(loc),
-                "Project Under": str(proj)
-            }).eq("Part Number", str(pnum)).execute()
-            log_event("Added", pnum, pname, f"Added {amt} units. New Total: {current_qty + amt}.", project_under=proj, part_type=ptype)
-        
-        st.success("Stock updated permanently!")
-        st.rerun()
-    if col2.button("No, Cancel"):
-        st.rerun()
+            st.write(f"Are you sure you want to add **{amt}** units to **{pname}** (`{pnum}`)?")
+            st.write(f"- **Current Stock:** {current_qty}")
+            st.write(f"- **New Total Quantity:** {current_qty + amt}")
 
-@st.dialog("Confirm Removal")
-def confirm_take_dialog(pnum, pname, amt, loc, proj, ptype, current_qty, min_qty):
-    new_stock = current_qty - amt
-    st.write(f"Are you sure you want to remove **{amt}** units of **{pname}** (`{pnum}`)?")
-    st.write(f"- **Current Stock:** {current_stock}")
-    st.write(f"- **Remaining Stock After Removal:** {max(0, new_stock)}")
-
-    col1, col2 = st.columns(2)
-    if col1.button("Yes, Confirm Removal", type="primary"):
-        if new_stock <= 0:
-            supabase.table("Inventory").update({"Qty on Hand": 0}).eq("Part Number", str(pnum)).execute()
-            log_event("Removed", pnum, pname, f"Removed {amt} units. Stock hit 0.", project_under=proj, part_type=ptype)
-            st.toast(f"🚨 ALERT: {pname} has hit 0 and is completely out of stock!", icon="🚨")
-        else:
-            supabase.table("Inventory").update({"Qty on Hand": new_stock}).eq("Part Number", str(pnum)).execute()
-            log_event("Removed", pnum, pname, f"Removed {amt} units. Remaining: {new_stock}", project_under=proj, part_type=ptype)
+        col1, col2 = st.columns(2)
+        if col1.button("Yes, Confirm Add", type="primary"):
+            remove_from_disregarded(pnum)
+            if is_new:
+                supabase.table("Inventory").insert({
+                    "Part Number": str(pnum),
+                    "Part Name": str(pname),
+                    "Part Type": str(ptype),
+                    "Qty on Hand": int(amt),
+                    "Location": str(loc),
+                    "Project Under": str(proj),
+                    "PO Number": str(po),
+                    "Min Qty": int(min_qty)
+                }).execute()
+                log_event("Added", pnum, pname, f"Registered new item. Initial Qty: {amt} at {loc}. PO#: {po}", project_under=proj, part_type=ptype)
+            else:
+                supabase.table("Inventory").update({
+                    "Qty on Hand": current_qty + amt,
+                    "Min Qty": int(min_qty),
+                    "Location": str(loc),
+                    "Project Under": str(proj)
+                }).eq("Part Number", str(pnum)).execute()
+                log_event("Added", pnum, pname, f"Added {amt} units. New Total: {current_qty + amt}.", project_under=proj, part_type=ptype)
             
-            if new_stock <= min_qty and min_qty > 0:
-                st.warning(f"⚠️ LOW STOCK ALERT: {pname} is down to {new_stock} units!")
-        
-        st.success("Stock removed permanently!")
-        st.rerun()
-    if col2.button("No, Cancel"):
-        st.rerun()
+            st.session_state["pending_action"] = None
+            st.success("Stock updated permanently!")
+            st.rerun()
 
-@st.dialog("Confirm Alteration")
-def confirm_alter_dialog(orig_pnum, orig_loc, orig_proj, new_name, new_proj, new_po, new_type):
-    st.write(f"Are you sure you want to update attributes for **{new_name}** (`{orig_pnum}`)?")
-    st.write(f"- **Project Under:** {new_proj}")
-    st.write(f"- **PO Number:** {new_po}")
-    st.write(f"- **Part Type:** {new_type}")
+        if col2.button("No, Cancel"):
+            st.session_state["pending_action"] = None
+            st.rerun()
 
-    col1, col2 = st.columns(2)
-    if col1.button("Yes, Save Changes", type="primary"):
-        supabase.table("Inventory").update({
-            "Part Name": str(new_name),
-            "Project Under": str(new_proj),
-            "PO Number": str(new_po),
-            "Part Type": str(new_type)
-        }).eq("Part Number", str(orig_pnum)).execute()
-        
-        log_event("Altered", orig_pnum, new_name, f"Updated Attributes (PO#: {new_po}).", project_under=new_proj, part_type=new_type)
-        st.success("Part attributes successfully updated!")
-        st.rerun()
-    if col2.button("No, Cancel"):
-        st.rerun()
+    elif action_type == "take":
+        pnum, pname = action_data["pnum"], action_data["pname"]
+        amt, loc, proj = action_data["amt"], action_data["loc"], action_data["proj"]
+        ptype, current_qty, min_qty = action_data["ptype"], action_data["current_qty"], action_data["min_qty"]
+        new_stock = current_qty - amt
 
-@st.dialog("Confirm Disregard")
-def confirm_disregard_dialog(disregarded_rows):
-    st.write("Are you sure you want to disregard the following out-of-stock item(s)?")
-    for _, r in disregarded_rows.iterrows():
-        st.write(f"- **{r['Part Name']}** (`{r['Part Number']}`) [Project: {r['Project Under']}]")
+        st.write(f"Are you sure you want to remove **{amt}** units of **{pname}** (`{pnum}`)?")
+        st.write(f"- **Current Stock:** {current_qty}")
+        st.write(f"- **Remaining Stock After Removal:** {max(0, new_stock)}")
 
-    col1, col2 = st.columns(2)
-    if col1.button("Yes, Confirm Disregard", type="primary"):
+        col1, col2 = st.columns(2)
+        if col1.button("Yes, Confirm Removal", type="primary"):
+            if new_stock <= 0:
+                supabase.table("Inventory").update({"Qty on Hand": 0}).eq("Part Number", str(pnum)).execute()
+                log_event("Removed", pnum, pname, f"Removed {amt} units. Stock hit 0.", project_under=proj, part_type=ptype)
+                st.toast(f"🚨 ALERT: {pname} has hit 0 and is completely out of stock!", icon="🚨")
+            else:
+                supabase.table("Inventory").update({"Qty on Hand": new_stock}).eq("Part Number", str(pnum)).execute()
+                log_event("Removed", pnum, pname, f"Removed {amt} units. Remaining: {new_stock}", project_under=proj, part_type=ptype)
+                
+                if new_stock <= min_qty and min_qty > 0:
+                    st.warning(f"⚠️ LOW STOCK ALERT: {pname} is down to {new_stock} units!")
+            
+            st.session_state["pending_action"] = None
+            st.success("Stock removed permanently!")
+            st.rerun()
+
+        if col2.button("No, Cancel"):
+            st.session_state["pending_action"] = None
+            st.rerun()
+
+    elif action_type == "alter":
+        orig_pnum = action_data["orig_pnum"]
+        new_name, new_proj = action_data["new_name"], action_data["new_proj"]
+        new_po, new_type = action_data["new_po"], action_data["new_type"]
+
+        st.write(f"Are you sure you want to update attributes for **{new_name}** (`{orig_pnum}`)?")
+        st.write(f"- **Project Under:** {new_proj}")
+        st.write(f"- **PO Number:** {new_po}")
+        st.write(f"- **Part Type:** {new_type}")
+
+        col1, col2 = st.columns(2)
+        if col1.button("Yes, Save Changes", type="primary"):
+            supabase.table("Inventory").update({
+                "Part Name": str(new_name),
+                "Project Under": str(new_proj),
+                "PO Number": str(new_po),
+                "Part Type": str(new_type)
+            }).eq("Part Number", str(orig_pnum)).execute()
+            
+            log_event("Altered", orig_pnum, new_name, f"Updated Attributes (PO#: {new_po}).", project_under=new_proj, part_type=new_type)
+            st.session_state["pending_action"] = None
+            st.success("Part attributes successfully updated!")
+            st.rerun()
+
+        if col2.button("No, Cancel"):
+            st.session_state["pending_action"] = None
+            st.rerun()
+
+    elif action_type == "disregard":
+        disregarded_rows = action_data["rows"]
+        st.write("Are you sure you want to disregard the following out-of-stock item(s)?")
         for _, r in disregarded_rows.iterrows():
-            disregard_item(r['Part Number'], r['Project Under'])
-        st.sidebar.success("Item(s) disregarded!")
-        st.rerun()
-    if col2.button("No, Cancel"):
-        st.rerun()
+            st.write(f"- **{r['Part Name']}** (`{r['Part Number']}`) [Project: {r['Project Under']}]")
+
+        col1, col2 = st.columns(2)
+        if col1.button("Yes, Confirm Disregard", type="primary"):
+            for _, r in disregarded_rows.iterrows():
+                disregard_item(r['Part Number'], r['Project Under'])
+            st.session_state["pending_action"] = None
+            st.sidebar.success("Item(s) disregarded!")
+            st.rerun()
+
+        if col2.button("No, Cancel"):
+            st.session_state["pending_action"] = None
+            st.rerun()
+
+# Trigger confirmation dialog if pending action exists
+if st.session_state.get("pending_action"):
+    show_confirmation_dialog()
 
 # --- PAGE SETUP ---
 st.set_page_config(
@@ -492,7 +538,7 @@ with tab3:
         else:
             st.warning("No items currently registered matching selected Project or PO criteria.")
 
-# --- TAB 4: ADD INVENTORY WITH CONFIRMATION ---
+# --- TAB 4: ADD INVENTORY ---
 with tab4:
     st.header("Receive / Add Stock")
     
@@ -503,23 +549,23 @@ with tab4:
     selected_proj_add = col_f1.selectbox("Filter by Project Under:", existing_projects, key="add_filter_proj")
     selected_type_add = col_f2.selectbox("Filter by Part Type:", existing_types, key="add_filter_type")
     
+    filtered_add_pool = apply_category_filters(active_df, selected_proj_add, selected_type_add)
     add_query = st.text_input("Type any part number, name, or character fragment to ADD stock:", key="add_input").strip()
     
     show_new_form = False
     
     if add_query:
-        filtered_add = active_df.copy()
-        if selected_proj_add != "All Projects":
-            filtered_add = filtered_add[filtered_add['Project Under'] == selected_proj_add]
-        if selected_type_add != "All Part Types":
-            filtered_add = filtered_add[filtered_add['Part Type'] == selected_type_add]
-            
-        results = fuzzy_search_df(filtered_add, add_query)
+        results = fuzzy_search_df(filtered_add_pool, add_query)
         if results.empty:
-            st.warning(f"No existing items found matching '{add_query}'. Complete form below to register it as a brand new item:")
-            show_new_form = True
+            global_check = fuzzy_search_df(active_df, add_query)
+            if not global_check.empty:
+                st.warning(f"No match found under current filters ('{selected_proj_add}' / '{selected_type_add}'), but found matching item(s) in main database:")
+                results = global_check
+            else:
+                st.warning(f"No existing items found matching '{add_query}'. Fill out the form below to register it as a brand new item:")
+                show_new_form = True
     else:
-        results = pd.DataFrame()
+        results = filtered_add_pool
         if st.checkbox("Register a Brand New Item"):
             show_new_form = True
 
@@ -557,10 +603,22 @@ with tab4:
             elif not valid:
                 st.error("Invalid Location! Allowed Downstairs: A1-A3, B1-B3, C1-C4, D1-D4, E1-E4, F1-F3 | Allowed Upstairs: G1-G3, H1-H3, I1-I3")
             else:
-                confirm_add_dialog(new_num, new_name, new_qty, formatted_loc, new_proj, new_type, new_po, True, min_qty=new_min_qty)
+                st.session_state["pending_action"] = {
+                    "type": "add",
+                    "is_new": True,
+                    "pnum": new_num,
+                    "pname": new_name,
+                    "amt": new_qty,
+                    "loc": formatted_loc,
+                    "proj": new_proj,
+                    "ptype": new_type,
+                    "po": new_po,
+                    "min_qty": new_min_qty
+                }
+                st.rerun()
 
-    elif not results.empty:
-        st.success(f"Found {len(results)} potential matching item(s):")
+    elif not results.empty and add_query:
+        st.success(f"Found {len(results)} matching item(s):")
         options = [f"{row['Part Name']} (#{row['Part Number']}) | Type: {row['Part Type']} | Proj: {row['Project Under']} | PO#: {row['PO Number']} | Qty: {row['Qty on Hand']} | Loc: {row['Location']}" for idx, row in results.iterrows()]
         choice = st.selectbox("Select the exact item row to add stock to:", options, key="add_select")
         row_idx = results.index[options.index(choice)]
@@ -577,9 +635,22 @@ with tab4:
             target_ptype = active_df.at[row_idx, 'Part Type']
             current_qty = int(active_df.at[row_idx, 'Qty on Hand'])
             
-            confirm_add_dialog(target_pnum, target_pname, amt_to_add, target_loc, target_proj, target_ptype, target_po, False, current_qty=current_qty, min_qty=new_min_qty)
+            st.session_state["pending_action"] = {
+                "type": "add",
+                "is_new": False,
+                "pnum": target_pnum,
+                "pname": target_pname,
+                "amt": amt_to_add,
+                "loc": target_loc,
+                "proj": target_proj,
+                "ptype": target_ptype,
+                "po": target_po,
+                "current_qty": current_qty,
+                "min_qty": new_min_qty
+            }
+            st.rerun()
 
-# --- TAB 5: TAKE INVENTORY WITH CONFIRMATION ---
+# --- TAB 5: TAKE INVENTORY ---
 with tab5:
     st.header("Remove / Assemble Stock")
     
@@ -590,18 +661,13 @@ with tab5:
     selected_proj_take = col_f1.selectbox("Filter by Project Under:", existing_projects, key="take_filter_proj")
     selected_type_take = col_f2.selectbox("Filter by Part Type:", existing_types, key="take_filter_type")
     
+    filtered_take_pool = apply_category_filters(active_df, selected_proj_take, selected_type_take)
     take_query = st.text_input("Type any part number, name, or character fragment to TAKE stock:", key="take_input").strip()
     
-    filtered_take = active_df.copy()
-    if selected_proj_take != "All Projects":
-        filtered_take = filtered_take[filtered_take['Project Under'] == selected_proj_take]
-    if selected_type_take != "All Part Types":
-        filtered_take = filtered_take[filtered_take['Part Type'] == selected_type_take]
-        
     if take_query:
-        results = fuzzy_search_df(filtered_take, take_query)
+        results = fuzzy_search_df(filtered_take_pool, take_query)
     else:
-        results = filtered_take
+        results = filtered_take_pool
     
     if results.empty:
         st.warning("No parts found matching selected search query or filters.")
@@ -620,56 +686,88 @@ with tab5:
             p_type = active_df.at[row_idx, 'Part Type']
             min_threshold = int(active_df.at[row_idx, 'Min Qty'])
             
-            confirm_take_dialog(part_num, part_name, amt_to_sub, loc_name, proj_name, p_type, current_stock, min_threshold)
+            st.session_state["pending_action"] = {
+                "type": "take",
+                "pnum": part_num,
+                "pname": part_name,
+                "amt": amt_to_sub,
+                "loc": loc_name,
+                "proj": proj_name,
+                "ptype": p_type,
+                "current_qty": current_stock,
+                "min_qty": min_threshold
+            }
+            st.rerun()
 
-# --- TAB 6: ALTER PART WITH CONFIRMATION ---
+# --- TAB 6: ALTER PART ---
 with tab6:
     st.header("Alter Part Attributes")
+    
+    col_f1, col_f2 = st.columns(2)
+    existing_projects = ["All Projects"] + sorted(list(set(active_df['Project Under'].dropna().astype(str).unique())))
+    existing_types = ["All Part Types"] + sorted([t for t in active_df['Part Type'].dropna().astype(str).unique() if t.strip()])
+    
+    selected_proj_alter = col_f1.selectbox("Filter by Project Under:", existing_projects, key="alter_filter_proj")
+    selected_type_alter = col_f2.selectbox("Filter by Part Type:", existing_types, key="alter_filter_type")
+    
+    filtered_alter_pool = apply_category_filters(active_df, selected_proj_alter, selected_type_alter)
     alter_query = st.text_input("Type any part number, name, or character fragment to ALTER:", key="alter_input").strip()
     
     if alter_query:
-        results = fuzzy_search_df(active_df, alter_query)
+        results = fuzzy_search_df(filtered_alter_pool, alter_query)
+    else:
+        results = filtered_alter_pool
         
-        if results.empty:
-            st.error("No parts found matching your query.")
+    if results.empty:
+        st.error("No parts found matching your query or filters.")
+    else:
+        options = [f"{row['Part Name']} (#{row['Part Number']}) | Proj: {row['Project Under']} | PO#: {row['PO Number']} | Loc: {row['Location']}" for idx, row in results.iterrows()]
+        choice = st.selectbox("Select the exact item to edit:", options, key="alter_select")
+        row_idx = results.index[options.index(choice)]
+        
+        st.subheader(f"Editing Part: {active_df.at[row_idx, 'Part Number']}")
+        
+        orig_pnum = active_df.at[row_idx, 'Part Number']
+        orig_loc = active_df.at[row_idx, 'Location']
+        orig_proj = active_df.at[row_idx, 'Project Under']
+        
+        updated_name = st.text_input("Part Name:", value=str(active_df.at[row_idx, 'Part Name']))
+        
+        col_a1, col_a2, col_a3 = st.columns(3)
+        updated_project = col_a1.text_input("Project Under:", value=str(active_df.at[row_idx, 'Project Under']))
+        updated_po = col_a2.text_input("PO Number Ordered Under:", value=str(active_df.at[row_idx, 'PO Number']) if pd.notna(active_df.at[row_idx, 'PO Number']) else "")
+        
+        current_type = str(active_df.at[row_idx, 'Part Type']) if pd.notna(active_df.at[row_idx, 'Part Type']) else ""
+        known_types = sorted([t for t in active_df['Part Type'].dropna().astype(str).unique() if t.strip()])
+        
+        if current_type and current_type not in known_types:
+            known_types.append(current_type)
+        
+        type_options = known_types + ["+ Add New Part Type"]
+        
+        default_index = type_options.index(current_type) if current_type in type_options else 0
+        selected_type_opt = col_a3.selectbox("Part Type", options=type_options, index=default_index, key="alter_part_type_select")
+        
+        if selected_type_opt == "+ Add New Part Type":
+            updated_type = col_a3.text_input("Enter New Part Type Name:", key="alter_part_type_custom").strip()
         else:
-            options = [f"{row['Part Name']} (#{row['Part Number']}) | Proj: {row['Project Under']} | PO#: {row['PO Number']} | Loc: {row['Location']}" for idx, row in results.iterrows()]
-            choice = st.selectbox("Select the exact item to edit:", options, key="alter_select")
-            row_idx = results.index[options.index(choice)]
-            
-            st.subheader(f"Editing Part: {active_df.at[row_idx, 'Part Number']}")
-            
-            orig_pnum = active_df.at[row_idx, 'Part Number']
-            orig_loc = active_df.at[row_idx, 'Location']
-            orig_proj = active_df.at[row_idx, 'Project Under']
-            
-            updated_name = st.text_input("Part Name:", value=str(active_df.at[row_idx, 'Part Name']))
-            
-            col_a1, col_a2, col_a3 = st.columns(3)
-            updated_project = col_a1.text_input("Project Under:", value=str(active_df.at[row_idx, 'Project Under']))
-            updated_po = col_a2.text_input("PO Number Ordered Under:", value=str(active_df.at[row_idx, 'PO Number']) if pd.notna(active_df.at[row_idx, 'PO Number']) else "")
-            
-            current_type = str(active_df.at[row_idx, 'Part Type']) if pd.notna(active_df.at[row_idx, 'Part Type']) else ""
-            known_types = sorted([t for t in active_df['Part Type'].dropna().astype(str).unique() if t.strip()])
-            
-            if current_type and current_type not in known_types:
-                known_types.append(current_type)
-            
-            type_options = known_types + ["+ Add New Part Type"]
-            
-            default_index = type_options.index(current_type) if current_type in type_options else 0
-            selected_type_opt = col_a3.selectbox("Part Type", options=type_options, index=default_index, key="alter_part_type_select")
-            
-            if selected_type_opt == "+ Add New Part Type":
-                updated_type = col_a3.text_input("Enter New Part Type Name:", key="alter_part_type_custom").strip()
+            updated_type = selected_type_opt
+        
+        if st.button("Save Altered Attributes"):
+            if not updated_type:
+                st.error("Part Type is required.")
             else:
-                updated_type = selected_type_opt
-            
-            if st.button("Save Altered Attributes"):
-                if not updated_type:
-                    st.error("Part Type is required.")
-                else:
-                    confirm_alter_dialog(orig_pnum, orig_loc, orig_proj, updated_name, updated_project, updated_po, updated_type)
+                st.session_state["pending_action"] = {
+                    "type": "alter",
+                    "orig_pnum": orig_pnum,
+                    "orig_loc": orig_loc,
+                    "orig_proj": orig_proj,
+                    "new_name": updated_name,
+                    "new_proj": updated_project,
+                    "new_po": updated_po,
+                    "new_type": updated_type
+                }
+                st.rerun()
 
 # --- TAB 7: CHANGE LOCATION ---
 with tab7:
@@ -803,7 +901,11 @@ else:
     disregarded_rows = edited_df[edited_df['Disregard'] == True]
     if not disregarded_rows.empty:
         if st.sidebar.button("Confirm Disregard Selected"):
-            confirm_disregard_dialog(disregarded_rows)
+            st.session_state["pending_action"] = {
+                "type": "disregard",
+                "rows": disregarded_rows
+            }
+            st.rerun()
 
 # --- Sidebar Footer ---
 st.sidebar.markdown("---")
