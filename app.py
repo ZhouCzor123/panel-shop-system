@@ -48,25 +48,22 @@ def load_disregarded_items():
     except Exception:
         return pd.DataFrame(columns=['Part Number', 'Project Under', 'Location'])
 
-def disregard_item(part_num, project_under, location=""):
+def delete_inventory_row(row_id, part_num, project_under):
     try:
+        # 1. Permanently remove the specific row from Inventory by ID
+        if row_id is not None and pd.notna(row_id):
+            supabase.table("Inventory").delete().eq("id", row_id).execute()
+        else:
+            supabase.table("Inventory").delete().eq("Part Number", str(part_num)).eq("Project Under", str(project_under)).execute()
+            
+        # 2. Record in Disregarded_Items for audit/log history
         supabase.table("Disregarded_Items").insert({
             "Part Number": str(part_num),
             "Project Under": str(project_under)
         }).execute()
         st.cache_data.clear()
     except Exception as e:
-        st.error(f"Error disregarding item: {e}")
-
-def remove_from_disregarded(part_num, project_under=""):
-    try:
-        query = supabase.table("Disregarded_Items").delete().eq("Part Number", str(part_num))
-        if project_under:
-            query = query.eq("Project Under", str(project_under))
-        query.execute()
-        st.cache_data.clear()
-    except Exception as e:
-        st.error(f"Error restoring disregarded item: {e}")
+        st.error(f"Error removing item: {e}")
 
 def load_logs():
     try:
@@ -198,7 +195,6 @@ def show_confirmation_dialog():
 
         col1, col2 = st.columns(2)
         if col1.button("Yes, Confirm Add", type="primary"):
-            remove_from_disregarded(pnum, proj)
             if is_new:
                 supabase.table("Inventory").insert({
                     "Part Number": str(pnum),
@@ -257,7 +253,7 @@ def show_confirmation_dialog():
                 log_event("Removed", pnum, pname, f"Removed {amt} units. Stock hit 0.", project_under=proj, part_type=ptype)
                 st.toast(f"🚨 ALERT: {pname} has hit 0 and is completely out of stock!", icon="🚨")
             else:
-                log_event("Removed", pnum, pname, f"Removed {amt} units. Remaining: {new_stock}", project_under=proj, part_type=p_type)
+                log_event("Removed", pnum, pname, f"Removed {amt} units. Remaining: {new_stock}", project_under=proj, part_type=ptype)
                 if new_stock <= min_qty and min_qty > 0:
                     st.warning(f"⚠️ LOW STOCK ALERT: {pname} is down to {new_stock} units!")
             
@@ -305,16 +301,18 @@ def show_confirmation_dialog():
 
     elif action_type == "disregard":
         disregarded_rows = action_data["rows"]
-        st.write("Are you sure you want to disregard the following out-of-stock item(s)?")
+        st.write("Are you sure you want to disregard and permanently remove the following out-of-stock item(s)?")
         for _, r in disregarded_rows.iterrows():
-            st.write(f"- **{r['Part Name']}** (`{r['Part Number']}`) [Project: {r['Project Under']}]")
+            st.write(f"- **{r['Part Name']}** (`{r['Part Number']}`) [Project: {r['Project Under']}] (ID: {r.get('id', 'N/A')})")
 
         col1, col2 = st.columns(2)
         if col1.button("Yes, Confirm Disregard", type="primary"):
             for _, r in disregarded_rows.iterrows():
-                disregard_item(r['Part Number'], r['Project Under'], r.get('Location', ''))
+                row_id = r.get('id') if 'id' in r and pd.notna(r['id']) else None
+                delete_inventory_row(row_id, r['Part Number'], r['Project Under'])
+                log_event("Disregarded", r['Part Number'], r['Part Name'], f"Disregarded row ID: {row_id}", project_under=r['Project Under'])
             st.session_state["pending_action"] = None
-            st.success("Item(s) disregarded successfully!")
+            st.success("Item(s) disregarded and deleted from inventory!")
             st.rerun()
 
         if col2.button("No, Cancel"):
@@ -348,12 +346,7 @@ if not st.session_state["authenticated"]:
 
 st.title("Panel Shop Inventory System")
 df = load_permanent_data()
-disregarded_df = load_disregarded_items()
-
 active_df = df.copy()
-if not disregarded_df.empty:
-    disregarded_pairs = set(zip(disregarded_df['Part Number'].astype(str), disregarded_df['Project Under'].astype(str)))
-    active_df = active_df[~active_df.apply(lambda r: (str(r['Part Number']), str(r['Project Under'])) in disregarded_pairs, axis=1)]
 
 tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "Scan Search", 
@@ -842,7 +835,7 @@ with tab8:
     else:
         col_l1, col_l2, col_l3 = st.columns(3)
         
-        action_filter = col_l1.selectbox("Filter by Action:", ["All", "Added", "Removed", "Moved", "Altered"])
+        action_filter = col_l1.selectbox("Filter by Action:", ["All", "Added", "Removed", "Moved", "Altered", "Disregarded"])
         log_proj_filter = col_l2.selectbox("Filter by Project Under:", ["All Projects"] + sorted(list(set(log_df['Project Under'].dropna().astype(str).unique()))))
         log_type_filter = col_l3.selectbox("Filter by Part Type:", ["All Part Types"] + sorted([t for t in log_df['Part Type'].dropna().astype(str).unique() if t.strip()]))
         
