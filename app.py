@@ -14,6 +14,49 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# --- PAGE SETUP & CUSTOM SCROLLBAR CSS ---
+st.set_page_config(
+    page_title="Panel Shop Inventory System", 
+    page_icon="BlackMcDonald_Logo.webp", 
+    layout="wide"
+)
+
+# Custom CSS to force visible, styled scrollbars for vertical and horizontal scrolling
+st.markdown("""
+    <style>
+    /* Force visible scrollbars across main page and sidebar */
+    ::-webkit-scrollbar {
+        width: 12px !important;
+        height: 12px !important;
+    }
+    ::-webkit-scrollbar-track {
+        background: #1e1e1e !important;
+        border-radius: 6px !important;
+    }
+    ::-webkit-scrollbar-thumb {
+        background: #4a4a4a !important;
+        border-radius: 6px !important;
+        border: 2px solid #1e1e1e !important;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+        background: #ff4b4b !important;
+    }
+    
+    /* Ensure content containers scroll cleanly vertically and horizontally */
+    .stMainBlockContainer, [data-testid="stSidebarContent"] {
+        overflow-x: auto !important;
+        overflow-y: auto !important;
+    }
+    
+    /* Dataframe table containers scroll styling */
+    [data-testid="stDataFrame"] > div {
+        overflow-x: auto !important;
+        overflow-y: auto !important;
+        max-height: 70vh !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 # --- DATABASE LOADERS ---
 def load_permanent_data():
     try:
@@ -50,13 +93,11 @@ def load_disregarded_items():
 
 def delete_inventory_row(row_id, part_num, project_under):
     try:
-        # 1. Permanently remove the specific row from Inventory by ID
         if row_id is not None and pd.notna(row_id):
             supabase.table("Inventory").delete().eq("id", row_id).execute()
         else:
             supabase.table("Inventory").delete().eq("Part Number", str(part_num)).eq("Project Under", str(project_under)).execute()
             
-        # 2. Record in Disregarded_Items for audit/log history
         supabase.table("Disregarded_Items").insert({
             "Part Number": str(part_num),
             "Project Under": str(project_under)
@@ -323,13 +364,7 @@ def show_confirmation_dialog():
 if st.session_state.get("pending_action"):
     show_confirmation_dialog()
 
-# --- PAGE SETUP ---
-st.set_page_config(
-    page_title="Panel Shop Inventory System", 
-    page_icon="BlackMcDonald_Logo.webp", 
-    layout="wide"
-)
-
+# --- AUTHENTICATION ---
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 
