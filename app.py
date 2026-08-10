@@ -14,17 +14,17 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- PAGE SETUP & EDGE-HOVER AUTO-SCROLL CSS ---
+# --- PAGE SETUP & FIXED SCROLLBAR CSS ---
 st.set_page_config(
     page_title="Panel Shop Inventory System", 
     page_icon="BlackMcDonald_Logo.webp", 
     layout="wide"
 )
 
-# Custom CSS for visible scrollbars and edge-hover scrolling behavior
+# Custom CSS for clean, always-visible scrollbars without blocking pointer events
 st.markdown("""
     <style>
-    /* Force visible scrollbars across main page and sidebar */
+    /* Always visible scrollbars across main page and sidebar */
     ::-webkit-scrollbar {
         width: 12px !important;
         height: 12px !important;
@@ -42,71 +42,15 @@ st.markdown("""
         background: #ff4b4b !important;
     }
     
-    /* Content container scroll setup */
-    .stMainBlockContainer, [data-testid="stSidebarContent"] {
-        overflow-x: auto !important;
-        overflow-y: auto !important;
-        scroll-behavior: smooth !important;
+    /* Ensure tables scroll smoothly horizontally and vertically */
+    [data-testid="stDataFrame"] {
+        overflow: auto !important;
     }
-    
-    /* Dataframe table containers */
     [data-testid="stDataFrame"] > div {
-        overflow-x: auto !important;
-        overflow-y: auto !important;
         max-height: 70vh !important;
-        scroll-behavior: smooth !important;
     }
     </style>
 """, unsafe_allow_html=True)
-
-# JavaScript snippet for auto-scrolling containers on edge hover
-st.components.v1.html("""
-    <script>
-    document.addEventListener("DOMContentLoaded", function() {
-        const scrollSpeed = 15;
-        let scrollInterval = null;
-
-        function startScroll(element, directionX, directionY) {
-            stopScroll();
-            scrollInterval = setInterval(() => {
-                element.scrollBy(directionX * scrollSpeed, directionY * scrollSpeed);
-            }, 20);
-        }
-
-        function stopScroll() {
-            if (scrollInterval) {
-                clearInterval(scrollInterval);
-                scrollInterval = null;
-            }
-        }
-
-        document.addEventListener("mousemove", function(e) {
-            const width = window.innerWidth;
-            const height = window.innerHeight;
-            const edgeThreshold = 60; // Pixels from edge to trigger scroll
-
-            const mainContainer = window.parent.document.querySelector('.stMainBlockContainer') || window.parent.document.documentElement;
-
-            let dirX = 0;
-            let dirY = 0;
-
-            if (e.clientX < edgeThreshold) dirX = -1;
-            else if (e.clientX > width - edgeThreshold) dirX = 1;
-
-            if (e.clientY < edgeThreshold) dirY = -1;
-            else if (e.clientY > height - edgeThreshold) dirY = 1;
-
-            if (dirX !== 0 || dirY !== 0) {
-                startScroll(mainContainer, dirX, dirY);
-            } else {
-                stopScroll();
-            }
-        });
-
-        document.addEventListener("mouseleave", stopScroll);
-    });
-    </script>
-""", height=0, width=0)
 
 # --- DATABASE LOADERS ---
 def load_permanent_data():
