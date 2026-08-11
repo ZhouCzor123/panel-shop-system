@@ -340,7 +340,7 @@ def show_confirmation_dialog():
         disregarded_rows = action_data["rows"]
         st.write("Are you sure you want to disregard and permanently remove the following out-of-stock item(s)?")
         for _, r in disregarded_rows.iterrows():
-            st.write(f"- **{r['Part Name']}** (`{r['Part Number']}`) [Project: {r['Project Under']}] (ID: {r.get('id', 'N/A')})")
+            st.write(f"- **{r['Part Name']}** (`{r['Part Number']}`) [Project: {r['Project Under']}]")
 
         col1, col2 = st.columns(2)
         if col1.button("Yes, Confirm Disregard", type="primary"):
@@ -870,7 +870,6 @@ with tab8:
     if log_df.empty:
         st.info("No activity logged yet.")
     else:
-        # Determine the earliest log entry date to start the calendar bounds
         log_df['Timestamp_DT'] = pd.to_datetime(log_df['Timestamp'], errors='coerce')
         valid_dates = log_df['Timestamp_DT'].dropna()
         
@@ -898,7 +897,6 @@ with tab8:
         
         filtered_logs = log_df.copy()
         
-        # Apply Calendar Date Filter if a date is picked
         if selected_date is not None:
             filtered_logs = filtered_logs[filtered_logs['Timestamp_DT'].dt.date == selected_date]
             st.caption(f"Showing **{len(filtered_logs)}** log event(s) recorded on **{selected_date.strftime('%B %d, %Y')}**:")
@@ -928,9 +926,15 @@ low_stock_df = active_df[low_stock_mask].copy()
 if low_stock_df.empty:
     st.sidebar.success("No active low/out-of-stock items needing restock.")
 else:
+    # Explicitly select display columns excluding 'id' from configuration mapping
     display_df = low_stock_df[['Part Name', 'Part Number', 'Project Under', 'PO Number', 'Location']].copy()
+    
+    # Retain ID mapping on source dataframe for targeting
     if 'id' in low_stock_df.columns:
-        display_df['id'] = low_stock_df['id']
+        row_ids = low_stock_df['id'].tolist()
+    else:
+        row_ids = [None] * len(low_stock_df)
+        
     display_df.insert(0, "Disregard", False)
     
     copy_text_lines = ["Product Name\tPart Number\tProject Under\tPO Number\tLocation"]
@@ -982,18 +986,25 @@ else:
             "Part Number": st.column_config.TextColumn("Part Number", disabled=True),
             "Project Under": st.column_config.TextColumn("Project Under", disabled=True),
             "PO Number": st.column_config.TextColumn("PO#", disabled=True),
-            "Location": st.column_config.TextColumn("Loc", disabled=True),
-            "id": None
+            "Location": st.column_config.TextColumn("Loc", disabled=True)
         },
         key="low_stock_editor"
     )
     
-    disregarded_rows = edited_df[edited_df['Disregard'] == True]
-    if not disregarded_rows.empty:
+    disregarded_indices = edited_df[edited_df['Disregard'] == True].index.tolist()
+    if disregarded_indices:
+        disregarded_rows_to_process = []
+        for idx in disregarded_indices:
+            row_data = edited_df.loc[idx].to_dict()
+            row_data['id'] = row_ids[idx] if idx < len(row_ids) else None
+            disregarded_rows_to_process.append(row_data)
+            
+        disregarded_df_to_process = pd.DataFrame(disregarded_rows_to_process)
+        
         if st.sidebar.button("Confirm Disregard Selected"):
             st.session_state["pending_action"] = {
                 "type": "disregard",
-                "rows": disregarded_rows
+                "rows": disregarded_df_to_process
             }
             st.rerun()
 
