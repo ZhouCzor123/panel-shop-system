@@ -21,7 +21,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# Custom CSS for clean, always-visible scrollbars without blocking pointer events
 st.markdown("""
     <style>
     /* Always visible scrollbars across main page and sidebar */
@@ -171,7 +170,6 @@ def highlight_shortages(row):
         return ['background-color: #ffcccc; color: #900000; font-weight: bold'] * len(row)
     return [''] * len(row)
 
-# Strict Space, Dash, Slash & Case Insensitive Normalization
 def normalize_str(val):
     if pd.isna(val):
         return ""
@@ -303,11 +301,13 @@ def show_confirmation_dialog():
 
     elif action_type == "alter":
         orig_pnum = action_data["orig_pnum"]
+        new_pnum = action_data["new_pnum"]
         new_name, new_proj = action_data["new_name"], action_data["new_proj"]
         new_po, new_type = action_data["new_po"], action_data["new_type"]
         target_id = action_data.get("target_id")
 
-        st.write(f"Are you sure you want to update attributes for **{new_name}** (`{orig_pnum}`)?")
+        st.write(f"Are you sure you want to update attributes for **{new_name}**?")
+        st.write(f"- **Part Number:** `{orig_pnum}` → `{new_pnum}`")
         st.write(f"- **Project Under:** {new_proj}")
         st.write(f"- **PO Number:** {new_po}")
         st.write(f"- **Part Type:** {new_type}")
@@ -315,6 +315,7 @@ def show_confirmation_dialog():
         col1, col2 = st.columns(2)
         if col1.button("Yes, Save Changes", type="primary"):
             query = supabase.table("Inventory").update({
+                "Part Number": str(new_pnum),
                 "Part Name": str(new_name),
                 "Project Under": str(new_proj),
                 "PO Number": str(new_po),
@@ -326,7 +327,7 @@ def show_confirmation_dialog():
                 query = query.eq("Part Number", str(orig_pnum))
             query.execute()
             
-            log_event("Altered", orig_pnum, new_name, f"Updated Attributes (PO#: {new_po}).", project_under=new_proj, part_type=new_type)
+            log_event("Altered", new_pnum, new_name, f"Updated Attributes (Orig P/N: {orig_pnum}, PO#: {new_po}).", project_under=new_proj, part_type=new_type)
             st.session_state["pending_action"] = None
             st.success("Part attributes successfully updated!")
             st.rerun()
@@ -778,7 +779,9 @@ with tab6:
         orig_loc = active_df.at[row_idx, 'Location']
         orig_proj = active_df.at[row_idx, 'Project Under']
         
-        updated_name = st.text_input("Part Name:", value=str(active_df.at[row_idx, 'Part Name']))
+        col_edit1, col_edit2 = st.columns(2)
+        updated_pnum = col_edit1.text_input("Part Number:", value=str(orig_pnum))
+        updated_name = col_edit2.text_input("Part Name:", value=str(active_df.at[row_idx, 'Part Name']))
         
         col_a1, col_a2, col_a3 = st.columns(3)
         updated_project = col_a1.text_input("Project Under:", value=str(active_df.at[row_idx, 'Project Under']))
@@ -801,13 +804,16 @@ with tab6:
             updated_type = selected_type_opt
         
         if st.button("Save Altered Attributes"):
-            if not updated_type:
+            if not updated_pnum.strip():
+                st.error("Part Number is required.")
+            elif not updated_type:
                 st.error("Part Type is required.")
             else:
                 st.session_state["pending_action"] = {
                     "type": "alter",
                     "target_id": target_id,
                     "orig_pnum": orig_pnum,
+                    "new_pnum": updated_pnum.strip(),
                     "orig_loc": orig_loc,
                     "orig_proj": orig_proj,
                     "new_name": updated_name,
