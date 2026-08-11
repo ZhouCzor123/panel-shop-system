@@ -862,20 +862,47 @@ with tab7:
                     st.success(f"Location updated to [{formatted_loc}] ({get_location_category(formatted_loc)})!")
                     st.rerun()
 
-# --- TAB 8: LOG HISTORY WITH FILTERS ---
+# --- TAB 8: LOG HISTORY WITH CALENDAR DATE SEARCH ---
 with tab8:
     st.header("Activity Log History")
     log_df = load_logs()
+    
     if log_df.empty:
         st.info("No activity logged yet.")
     else:
-        col_l1, col_l2, col_l3 = st.columns(3)
+        # Determine the earliest log entry date to start the calendar bounds
+        log_df['Timestamp_DT'] = pd.to_datetime(log_df['Timestamp'], errors='coerce')
+        valid_dates = log_df['Timestamp_DT'].dropna()
         
+        min_date = valid_dates.min().date() if not valid_dates.empty else pd.Timestamp.today().date()
+        today_date = pd.Timestamp.today().date()
+        
+        st.subheader("📅 Filter Logs by Calendar Date")
+        col_cal1, col_cal2 = st.columns([1.5, 2.5])
+        
+        selected_date = col_cal1.date_input(
+            "Select a specific date to view historical activity:",
+            value=None,
+            min_value=min_date,
+            max_value=today_date,
+            key="log_calendar_picker"
+        )
+        
+        if col_cal2.button("Clear Date Filter / Show All History"):
+            st.rerun()
+
+        col_l1, col_l2, col_l3 = st.columns(3)
         action_filter = col_l1.selectbox("Filter by Action:", ["All", "Added", "Removed", "Moved", "Altered", "Disregarded"])
         log_proj_filter = col_l2.selectbox("Filter by Project Under:", ["All Projects"] + sorted(list(set(log_df['Project Under'].dropna().astype(str).unique()))))
         log_type_filter = col_l3.selectbox("Filter by Part Type:", ["All Part Types"] + sorted([t for t in log_df['Part Type'].dropna().astype(str).unique() if t.strip()]))
         
         filtered_logs = log_df.copy()
+        
+        # Apply Calendar Date Filter if a date is picked
+        if selected_date is not None:
+            filtered_logs = filtered_logs[filtered_logs['Timestamp_DT'].dt.date == selected_date]
+            st.caption(f"Showing **{len(filtered_logs)}** log event(s) recorded on **{selected_date.strftime('%B %d, %Y')}**:")
+            
         if action_filter != "All":
             filtered_logs = filtered_logs[filtered_logs['Action'] == action_filter]
         if log_proj_filter != "All Projects":
@@ -883,7 +910,8 @@ with tab8:
         if log_type_filter != "All Part Types":
             filtered_logs = filtered_logs[filtered_logs['Part Type'] == log_type_filter]
             
-        st.dataframe(filtered_logs.iloc[::-1], use_container_width=True)
+        display_logs = filtered_logs.drop(columns=['Timestamp_DT'], errors='ignore')
+        st.dataframe(display_logs.iloc[::-1], use_container_width=True)
 
 # --- SIDEBAR: LIVE INVENTORY GRID VIEW ---
 st.sidebar.header("Live Inventory Grid View")
