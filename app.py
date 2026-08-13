@@ -14,7 +14,7 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- PAGE SETUP & SIDEBAR EXPANSION CSS ---
+# --- PAGE SETUP & FIXED SCROLLBAR CSS ---
 st.set_page_config(
     page_title="Panel Shop Inventory System", 
     page_icon="BlackMcDonald_Logo.webp", 
@@ -41,17 +41,7 @@ st.markdown("""
         background: #ff4b4b !important;
     }
     
-    /* Allow sidebar table to scroll horizontally without cutting off columns */
-    [data-testid="stSidebar"] [data-testid="stDataFrame"] {
-        width: 100% !important;
-        overflow-x: auto !important;
-    }
-    [data-testid="stSidebar"] [data-testid="stDataFrame"] > div {
-        max-height: 70vh !important;
-        overflow-x: auto !important;
-    }
-    
-    /* Main tables styling */
+    /* Allow tables to scroll smoothly horizontally and vertically */
     [data-testid="stDataFrame"] {
         overflow: auto !important;
     }
@@ -378,7 +368,7 @@ st.title("Panel Shop Inventory System")
 df = load_permanent_data()
 active_df = df.copy()
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     "Scan Search", 
     "Location Search",
     "Project & PO Search",
@@ -386,7 +376,8 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "Take Inventory", 
     "Alter Part",
     "Change Part Location",
-    "Log History"
+    "Log History",
+    "Full Inventory Table"
 ])
 
 # --- TAB 1: SCAN SEARCH ---
@@ -910,25 +901,33 @@ with tab8:
         display_logs = filtered_logs.drop(columns=['Timestamp_DT'], errors='ignore')
         st.dataframe(display_logs.iloc[::-1], use_container_width=True)
 
+# --- TAB 9: FULL INVENTORY TABLE (WITH SEARCH, SORT & FULLSCREEN) ---
+with tab9:
+    st.header("Full Live Inventory Grid View")
+    st.caption("Use the toolbar on top-right of table to Search, Sort columns, or expand to Fullscreen mode (⛶).")
+    
+    main_display_df = active_df.drop(columns=['id'], errors='ignore')
+    st.dataframe(
+        main_display_df, 
+        use_container_width=True,
+        column_config={
+            "Part Number": st.column_config.TextColumn("Part Number"),
+            "Part Name": st.column_config.TextColumn("Part Name"),
+            "Part Type": st.column_config.TextColumn("Part Type"),
+            "Qty on Hand": st.column_config.NumberColumn("Qty on Hand"),
+            "Location": st.column_config.TextColumn("Location"),
+            "Project Under": st.column_config.TextColumn("Project Under"),
+            "Min Qty": st.column_config.NumberColumn("Min Qty"),
+            "PO Number": st.column_config.TextColumn("PO Number")
+        }
+    )
+
 # --- SIDEBAR: LIVE INVENTORY GRID VIEW ---
 st.sidebar.header("Live Inventory Grid View")
 
-# Format columns with explicit widths so no text is cut off
+# Native sidebar rendering without truncation
 display_sidebar_df = active_df.drop(columns=['id'], errors='ignore')
-st.sidebar.dataframe(
-    display_sidebar_df, 
-    use_container_width=True,
-    column_config={
-        "Part Number": st.column_config.TextColumn("Part Number", width="medium"),
-        "Part Name": st.column_config.TextColumn("Part Name", width="large"),
-        "Part Type": st.column_config.TextColumn("Part Type", width="medium"),
-        "Qty on Hand": st.column_config.NumberColumn("Hand", width="small"),
-        "Location": st.column_config.TextColumn("Loc", width="small"),
-        "Project Under": st.column_config.TextColumn("Project Under", width="medium"),
-        "Min Qty": st.column_config.NumberColumn("Min", width="small"),
-        "PO Number": st.column_config.TextColumn("PO#", width="medium")
-    }
-)
+st.sidebar.dataframe(display_sidebar_df, use_container_width=True)
 
 # --- SIDEBAR: LOW / OUT OF STOCK TABLE & DISREGARD ACTION ---
 st.sidebar.markdown("---")
