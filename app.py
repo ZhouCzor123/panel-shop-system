@@ -643,8 +643,9 @@ with tab4:
                 }
                 st.rerun()
 
-    elif not results.empty and add_query:
-        st.success(f"Found {len(results)} matching item(s):")
+    elif not results.empty:
+        if add_query:
+            st.success(f"Found {len(results)} matching item(s):")
         options = [f"{row['Part Name']} (#{row['Part Number']}) | Type: {row['Part Type']} | Proj: {row['Project Under']} | PO#: {row['PO Number']} | Qty: {row['Qty on Hand']} | Loc: {row['Location']} (ID: {row.get('id', 'N/A')})" for idx, row in results.iterrows()]
         choice = st.selectbox("Select the exact item row to add stock to:", options, key="add_select")
         row_idx = results.index[options.index(choice)]
@@ -900,7 +901,6 @@ with tab9:
     st.caption("Hover over the table top-right corner to search, sort columns, or click Fullscreen.")
     
     main_display_df = active_df.drop(columns=['id'], errors='ignore')
-    # Plain dataframe rendering preserves native Streamlit search, sort, and fullscreen overlay
     st.dataframe(main_display_df, use_container_width=True)
 
 # --- SIDEBAR: LIVE INVENTORY GRID VIEW ---
@@ -930,7 +930,7 @@ else:
     
     copy_text_lines = ["Product Name\tPart Number\tProject Under\tPO Number\tLocation"]
     for _, r in display_df.iterrows():
-        copy_text_lines.append(f"{r['Part Name']}\t{r['Part Number']}\t{r['Project Under']}\t{r['PO Number']}\t{r['Location']}")
+        copy_text_lines.append(f"{r['Part Name']}\t{r['Part Number']}\t{r['Project Under']}\t{r['Location']}")
     raw_copy_str = "\\n".join(copy_text_lines).replace("'", "\\'")
     
     with st.sidebar:
