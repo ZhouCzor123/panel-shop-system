@@ -14,7 +14,7 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- PAGE SETUP & FIXED SCROLLBAR CSS ---
+# --- PAGE SETUP & SIDEBAR EXPANSION CSS ---
 st.set_page_config(
     page_title="Panel Shop Inventory System", 
     page_icon="BlackMcDonald_Logo.webp", 
@@ -41,7 +41,17 @@ st.markdown("""
         background: #ff4b4b !important;
     }
     
-    /* Ensure tables scroll smoothly horizontally and vertically */
+    /* Allow sidebar table to scroll horizontally without cutting off columns */
+    [data-testid="stSidebar"] [data-testid="stDataFrame"] {
+        width: 100% !important;
+        overflow-x: auto !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stDataFrame"] > div {
+        max-height: 70vh !important;
+        overflow-x: auto !important;
+    }
+    
+    /* Main tables styling */
     [data-testid="stDataFrame"] {
         overflow: auto !important;
     }
@@ -865,7 +875,7 @@ with tab8:
         min_date = valid_dates.min().date() if not valid_dates.empty else pd.Timestamp.today().date()
         today_date = pd.Timestamp.today().date()
         
-        st.subheader("📅 Filter Logs by Calendar Date")
+        st.subheader("Filter Logs by Calendar Date")
         col_cal1, col_cal2 = st.columns([1.5, 2.5])
         
         selected_date = col_cal1.date_input(
@@ -903,9 +913,22 @@ with tab8:
 # --- SIDEBAR: LIVE INVENTORY GRID VIEW ---
 st.sidebar.header("Live Inventory Grid View")
 
-# Filter out internal columns before rendering so controls remain intact
+# Format columns with explicit widths so no text is cut off
 display_sidebar_df = active_df.drop(columns=['id'], errors='ignore')
-st.sidebar.dataframe(display_sidebar_df, use_container_width=True)
+st.sidebar.dataframe(
+    display_sidebar_df, 
+    use_container_width=True,
+    column_config={
+        "Part Number": st.column_config.TextColumn("Part Number", width="medium"),
+        "Part Name": st.column_config.TextColumn("Part Name", width="large"),
+        "Part Type": st.column_config.TextColumn("Part Type", width="medium"),
+        "Qty on Hand": st.column_config.NumberColumn("Hand", width="small"),
+        "Location": st.column_config.TextColumn("Loc", width="small"),
+        "Project Under": st.column_config.TextColumn("Project Under", width="medium"),
+        "Min Qty": st.column_config.NumberColumn("Min", width="small"),
+        "PO Number": st.column_config.TextColumn("PO#", width="medium")
+    }
+)
 
 # --- SIDEBAR: LOW / OUT OF STOCK TABLE & DISREGARD ACTION ---
 st.sidebar.markdown("---")
