@@ -159,17 +159,6 @@ def generate_barcode_image(part_number):
     except Exception:
         return None
 
-def highlight_shortages(row):
-    try:
-        min_qty = float(row['Min Qty']) if pd.notna(row['Min Qty']) else 0
-        current_qty = float(row['Qty on Hand']) if pd.notna(row['Qty on Hand']) else 0
-    except ValueError:
-        min_qty, current_qty = 0, 0
-    
-    if current_qty <= min_qty and min_qty > 0:
-        return ['background-color: #ffcccc; color: #900000; font-weight: bold'] * len(row)
-    return [''] * len(row)
-
 def normalize_str(val):
     if pd.isna(val):
         return ""
@@ -913,8 +902,10 @@ with tab8:
 
 # --- SIDEBAR: LIVE INVENTORY GRID VIEW ---
 st.sidebar.header("Live Inventory Grid View")
-styled_df = active_df.style.apply(highlight_shortages, axis=1)
-st.sidebar.dataframe(styled_df, use_container_width=True)
+
+# Filter out internal columns before rendering so controls remain intact
+display_sidebar_df = active_df.drop(columns=['id'], errors='ignore')
+st.sidebar.dataframe(display_sidebar_df, use_container_width=True)
 
 # --- SIDEBAR: LOW / OUT OF STOCK TABLE & DISREGARD ACTION ---
 st.sidebar.markdown("---")
@@ -926,10 +917,8 @@ low_stock_df = active_df[low_stock_mask].copy()
 if low_stock_df.empty:
     st.sidebar.success("No active low/out-of-stock items needing restock.")
 else:
-    # Explicitly select display columns excluding 'id' from configuration mapping
     display_df = low_stock_df[['Part Name', 'Part Number', 'Project Under', 'PO Number', 'Location']].copy()
     
-    # Retain ID mapping on source dataframe for targeting
     if 'id' in low_stock_df.columns:
         row_ids = low_stock_df['id'].tolist()
     else:
