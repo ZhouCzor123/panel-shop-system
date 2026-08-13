@@ -14,13 +14,14 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- PAGE SETUP & FIXED SCROLLBAR CSS ---
+# --- PAGE SETUP ---
 st.set_page_config(
     page_title="Panel Shop Inventory System", 
     page_icon="BlackMcDonald_Logo.webp", 
     layout="wide"
 )
 
+# Clean, lightweight CSS for scrollbars without breaking native Streamlit table toolbars
 st.markdown("""
     <style>
     /* Always visible scrollbars across main page and sidebar */
@@ -39,14 +40,6 @@ st.markdown("""
     }
     ::-webkit-scrollbar-thumb:hover {
         background: #ff4b4b !important;
-    }
-    
-    /* Allow tables to scroll smoothly horizontally and vertically */
-    [data-testid="stDataFrame"] {
-        overflow: auto !important;
-    }
-    [data-testid="stDataFrame"] > div {
-        max-height: 70vh !important;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -901,31 +894,18 @@ with tab8:
         display_logs = filtered_logs.drop(columns=['Timestamp_DT'], errors='ignore')
         st.dataframe(display_logs.iloc[::-1], use_container_width=True)
 
-# --- TAB 9: FULL INVENTORY TABLE (WITH SEARCH, SORT & FULLSCREEN) ---
+# --- TAB 9: FULL INVENTORY TABLE (UNCONFIGURED FOR FULL TOOLBAR CAPABILITY) ---
 with tab9:
     st.header("Full Live Inventory Grid View")
-    st.caption("Use the toolbar on top-right of table to Search, Sort columns, or expand to Fullscreen mode (⛶).")
+    st.caption("Hover over the table top-right corner to search, sort columns, or click Fullscreen.")
     
     main_display_df = active_df.drop(columns=['id'], errors='ignore')
-    st.dataframe(
-        main_display_df, 
-        use_container_width=True,
-        column_config={
-            "Part Number": st.column_config.TextColumn("Part Number"),
-            "Part Name": st.column_config.TextColumn("Part Name"),
-            "Part Type": st.column_config.TextColumn("Part Type"),
-            "Qty on Hand": st.column_config.NumberColumn("Qty on Hand"),
-            "Location": st.column_config.TextColumn("Location"),
-            "Project Under": st.column_config.TextColumn("Project Under"),
-            "Min Qty": st.column_config.NumberColumn("Min Qty"),
-            "PO Number": st.column_config.TextColumn("PO Number")
-        }
-    )
+    # Plain dataframe rendering preserves native Streamlit search, sort, and fullscreen overlay
+    st.dataframe(main_display_df, use_container_width=True)
 
 # --- SIDEBAR: LIVE INVENTORY GRID VIEW ---
 st.sidebar.header("Live Inventory Grid View")
 
-# Native sidebar rendering without truncation
 display_sidebar_df = active_df.drop(columns=['id'], errors='ignore')
 st.sidebar.dataframe(display_sidebar_df, use_container_width=True)
 
@@ -987,18 +967,6 @@ else:
         display_df,
         hide_index=True,
         use_container_width=True,
-        column_config={
-            "Disregard": st.column_config.CheckboxColumn(
-                "Disregard",
-                help="Check to remove item permanently from active list",
-                default=False
-            ),
-            "Part Name": st.column_config.TextColumn("Product Name", disabled=True),
-            "Part Number": st.column_config.TextColumn("Part Number", disabled=True),
-            "Project Under": st.column_config.TextColumn("Project Under", disabled=True),
-            "PO Number": st.column_config.TextColumn("PO#", disabled=True),
-            "Location": st.column_config.TextColumn("Loc", disabled=True)
-        },
         key="low_stock_editor"
     )
     
