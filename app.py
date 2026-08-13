@@ -21,7 +21,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# Clean, lightweight CSS for scrollbars without breaking native Streamlit table toolbars
+# Clean, lightweight CSS for scrollbars
 st.markdown("""
     <style>
     /* Always visible scrollbars across main page and sidebar */
@@ -373,10 +373,28 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     "Full Inventory Table"
 ])
 
-# --- TAB 1: SCAN SEARCH ---
+# --- TAB 1: SCAN SEARCH (WITH BARCODE AUTO-REPLACE FOCUS LISTENER) ---
 with tab1:
     st.header("Search Database by Part")
-    search_query = st.text_input("Click here to SCAN a barcode, or TYPE part details (Name, Number, Type, PO#):", key="search_input").strip()
+    
+    # Injected JavaScript snippet to auto-select input text whenever the user/scanner interacts
+    components.html("""
+        <script>
+        const doc = window.parent.document;
+        doc.addEventListener('DOMContentLoaded', () => {
+            const scanInput = doc.querySelector('input[aria-label*="Click here to SCAN"]');
+            if (scanInput) {
+                scanInput.addEventListener('focus', () => scanInput.select());
+                scanInput.addEventListener('click', () => scanInput.select());
+            }
+        });
+        </script>
+    """, height=0, width=0)
+    
+    search_query = st.text_input(
+        "Click here to SCAN a barcode, or TYPE part details (Name, Number, Type, PO#):", 
+        key="search_input"
+    ).strip()
     
     if search_query:
         results = fuzzy_search_df(active_df, search_query)
@@ -895,7 +913,7 @@ with tab8:
         display_logs = filtered_logs.drop(columns=['Timestamp_DT'], errors='ignore')
         st.dataframe(display_logs.iloc[::-1], use_container_width=True)
 
-# --- TAB 9: FULL INVENTORY TABLE (UNCONFIGURED FOR FULL TOOLBAR CAPABILITY) ---
+# --- TAB 9: FULL INVENTORY TABLE ---
 with tab9:
     st.header("Full Live Inventory Grid View")
     st.caption("Hover over the table top-right corner to search, sort columns, or click Fullscreen.")
