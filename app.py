@@ -373,11 +373,10 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     "Full Inventory Table"
 ])
 
-# --- TAB 1: SCAN SEARCH (WITH BARCODE AUTO-REPLACE FOCUS LISTENER) ---
+# --- TAB 1: SCAN SEARCH ---
 with tab1:
     st.header("Search Database by Part")
     
-    # Injected JavaScript snippet to auto-select input text whenever the user/scanner interacts
     components.html("""
         <script>
         const doc = window.parent.document;
@@ -937,7 +936,8 @@ low_stock_df = active_df[low_stock_mask].copy()
 if low_stock_df.empty:
     st.sidebar.success("No active low/out-of-stock items needing restock.")
 else:
-    display_df = low_stock_df[['Part Name', 'Part Number', 'Project Under', 'PO Number', 'Location']].copy()
+    # Reordered columns: Part Name, Part Number, Qty on Hand, PO Number, Project Under
+    display_df = low_stock_df[['Part Name', 'Part Number', 'Qty on Hand', 'PO Number', 'Project Under']].copy()
     
     if 'id' in low_stock_df.columns:
         row_ids = low_stock_df['id'].tolist()
@@ -945,10 +945,33 @@ else:
         row_ids = [None] * len(low_stock_df)
         
     display_df.insert(0, "Disregard", False)
+    display_df['Order Qty'] = 0  # Editable column placed at the furthest right
     
-    copy_text_lines = ["Product Name\tPart Number\tProject Under\tPO Number\tLocation"]
-    for _, r in display_df.iterrows():
-        copy_text_lines.append(f"{r['Part Name']}\t{r['Part Number']}\t{r['Project Under']}\t{r['Location']}")
+    edited_df = st.sidebar.data_editor(
+        display_df,
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "Disregard": st.column_config.CheckboxColumn(
+                "Disregard",
+                help="Check to remove item permanently from active list",
+                default=False
+            ),
+            "Part Name": st.column_config.TextColumn("Part Name", disabled=True),
+            "Part Number": st.column_config.TextColumn("Part Number", disabled=True),
+            "Qty on Hand": st.column_config.NumberColumn("Current Qty", disabled=True),
+            "PO Number": st.column_config.TextColumn("PO Under", disabled=True),
+            "Project Under": st.column_config.TextColumn("Project Under", disabled=True),
+            "Order Qty": st.column_config.NumberColumn("Order Qty", min_value=0, step=1, help="Type quantity needed for purchase email")
+        },
+        key="low_stock_editor"
+    )
+    
+    # Generate Clipboard Text including typed Order Qty
+    copy_text_lines = ["Part Name\tPart Number\tCurrent Qty\tPO Under\tProject Under\tOrder Qty"]
+    for _, r in edited_df.iterrows():
+        order_val = int(r['Order Qty']) if pd.notna(r['Order Qty']) and r['Order Qty'] > 0 else ""
+        copy_text_lines.append(f"{r['Part Name']}\t{r['Part Number']}\t{int(r['Qty on Hand'])}\t{r['PO Number']}\t{r['Project Under']}\t{order_val}")
     raw_copy_str = "\\n".join(copy_text_lines).replace("'", "\\'")
     
     with st.sidebar:
@@ -958,7 +981,7 @@ else:
             function copyTextToClipboard() {{
                 const text = `{raw_copy_str}`;
                 navigator.clipboard.writeText(text.replace(/\\\\n/g, '\\n')).then(function() {{
-                    alert('Copied low-stock table to clipboard! Ready to paste into email.');
+                    alert('Copied low-stock table with order quantities to clipboard! Ready to paste into email.');
                 }}, function(err) {{
                     console.error('Copy failed: ', err);
                 }});
@@ -980,13 +1003,6 @@ else:
             """,
             height=45
         )
-    
-    edited_df = st.sidebar.data_editor(
-        display_df,
-        hide_index=True,
-        use_container_width=True,
-        key="low_stock_editor"
-    )
     
     disregarded_indices = edited_df[edited_df['Disregard'] == True].index.tolist()
     if disregarded_indices:
