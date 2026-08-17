@@ -44,6 +44,12 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# Helper to normalize PO Number values
+def format_po_number(val):
+    if pd.isna(val) or not str(val).strip() or str(val).strip().lower() in ['none', 'nan', '']:
+        return "N/A"
+    return str(val).strip()
+
 # --- DATABASE LOADERS ---
 def load_permanent_data():
     try:
@@ -62,7 +68,9 @@ def load_permanent_data():
         if 'Min Qty' not in df.columns:
             df['Min Qty'] = 0
         if 'PO Number' not in df.columns:
-            df['PO Number'] = ""
+            df['PO Number'] = "N/A"
+        else:
+            df['PO Number'] = df['PO Number'].apply(format_po_number)
         return df
     except Exception as e:
         st.error(f"Error loading inventory: {e}")
@@ -107,9 +115,13 @@ def load_logs():
             
         df = df[df['Action'] != "___DUMMY___"]
         df['Part Number'] = df['Part Number'].astype(str)
-        for col in ['Project Under', 'Part Type', 'PO Number']:
+        for col in ['Project Under', 'Part Type']:
             if col not in df.columns:
                 df[col] = ""
+        if 'PO Number' not in df.columns:
+            df['PO Number'] = "N/A"
+        else:
+            df['PO Number'] = df['PO Number'].apply(format_po_number)
         return df
     except Exception:
         return pd.DataFrame(columns=['Timestamp', 'Action', 'Part Number', 'Part Name', 'Project Under', 'Part Type', 'Details'])
@@ -204,6 +216,7 @@ def show_confirmation_dialog():
             st.write(f"- **Initial Quantity:** {amt}")
             st.write(f"- **Location:** {loc}")
             st.write(f"- **Project:** {proj}")
+            st.write(f"- **PO Number:** {po}")
         else:
             st.write(f"Are you sure you want to add **{amt}** units to **{pname}** (`{pnum}`)?")
             st.write(f"- **Current Stock:** {current_qty}")
@@ -422,7 +435,7 @@ with tab1:
                         st.markdown(f"### [{row['Location']}] *({loc_cat})*")
                     with col6:
                         st.caption("Project / PO#")
-                        st.markdown(f"**Proj:** {row['Project Under']}\n\n**PO#:** {row['PO Number'] if row.get('PO Number') else 'N/A'}")
+                        st.markdown(f"**Proj:** {row['Project Under']}\n\n**PO#:** {format_po_number(row.get('PO Number'))}")
                     with col7:
                         st.caption("Min Qty Limit")
                         st.markdown(f"### {int(row['Min Qty']) if pd.notna(row['Min Qty']) else 0}")
@@ -484,7 +497,7 @@ with tab2:
                     st.markdown(f"### [{row['Location']}] *({loc_cat})*")
                 with col6:
                     st.caption("Project / PO#")
-                    st.markdown(f"**Proj:** {row['Project Under']}\n\n**PO#:** {row['PO Number'] if row.get('PO Number') else 'N/A'}")
+                    st.markdown(f"**Proj:** {row['Project Under']}\n\n**PO#:** {format_po_number(row.get('PO Number'))}")
                 with col7:
                     st.caption("Min Qty Limit")
                     st.markdown(f"### {int(row['Min Qty']) if pd.notna(row['Min Qty']) else 0}")
@@ -562,7 +575,7 @@ with tab3:
                         st.markdown(f"### [{row['Location']}] *({loc_cat})*")
                     with col6:
                         st.caption("Project / PO#")
-                        st.markdown(f"**Proj:** {row['Project Under']}\n\n**PO#:** {row['PO Number'] if row.get('PO Number') else 'N/A'}")
+                        st.markdown(f"**Proj:** {row['Project Under']}\n\n**PO#:** {format_po_number(row.get('PO Number'))}")
                     with col7:
                         st.caption("Min Qty Limit")
                         st.markdown(f"### {int(row['Min Qty']) if pd.notna(row['Min Qty']) else 0}")
@@ -632,12 +645,13 @@ with tab4:
         
         col_n1, col_n2 = st.columns(2)
         new_proj = col_n1.text_input("Project Under:")
-        new_po = col_n2.text_input("PO Number Ordered Under (Optional):")
+        new_po = col_n2.text_input("PO Number Ordered Under (Optional, defaults to N/A):")
         
         new_min_qty = st.number_input("Minimum Quantity Alert Threshold (Optional, set 0 for None):", min_value=0, step=10, value=0)
         
         if st.button("Save Brand New Item"):
             valid, formatted_loc = is_valid_location(new_loc)
+            final_po = format_po_number(new_po)
             
             if not new_num.strip():
                 st.error("Part Number is required.")
@@ -655,7 +669,7 @@ with tab4:
                     "loc": formatted_loc,
                     "proj": new_proj,
                     "ptype": new_type,
-                    "po": new_po,
+                    "po": final_po,
                     "min_qty": new_min_qty
                 }
                 st.rerun()
@@ -663,7 +677,7 @@ with tab4:
     elif not results.empty:
         if add_query:
             st.success(f"Found {len(results)} matching item(s):")
-        options = [f"{row['Part Name']} (#{row['Part Number']}) | Type: {row['Part Type']} | Proj: {row['Project Under']} | PO#: {row['PO Number']} | Qty: {row['Qty on Hand']} | Loc: {row['Location']} (ID: {row.get('id', 'N/A')})" for idx, row in results.iterrows()]
+        options = [f"{row['Part Name']} (#{row['Part Number']}) | Type: {row['Part Type']} | Proj: {row['Project Under']} | PO#: {format_po_number(row['PO Number'])} | Qty: {row['Qty on Hand']} | Loc: {row['Location']} (ID: {row.get('id', 'N/A')})" for idx, row in results.iterrows()]
         choice = st.selectbox("Select the exact item row to add stock to:", options, key="add_select")
         row_idx = results.index[options.index(choice)]
         
@@ -676,7 +690,7 @@ with tab4:
             target_pname = active_df.at[row_idx, 'Part Name']
             target_loc = active_df.at[row_idx, 'Location']
             target_proj = active_df.at[row_idx, 'Project Under']
-            target_po = active_df.at[row_idx, 'PO Number']
+            target_po = format_po_number(active_df.at[row_idx, 'PO Number'])
             target_ptype = active_df.at[row_idx, 'Part Type']
             current_qty = int(active_df.at[row_idx, 'Qty on Hand'])
             
@@ -718,7 +732,7 @@ with tab5:
     if results.empty:
         st.warning("No parts found matching selected search query or filters.")
     else:
-        options = [f"{row['Part Name']} (#{row['Part Number']}) | Type: {row['Part Type']} | Proj: {row['Project Under']} | PO#: {row['PO Number']} | Qty: {row['Qty on Hand']} | Loc: {row['Location']} (ID: {row.get('id', 'N/A')})" for idx, row in results.iterrows()]
+        options = [f"{row['Part Name']} (#{row['Part Number']}) | Type: {row['Part Type']} | Proj: {row['Project Under']} | PO#: {format_po_number(row['PO Number'])} | Qty: {row['Qty on Hand']} | Loc: {row['Location']} (ID: {row.get('id', 'N/A')})" for idx, row in results.iterrows()]
         choice = st.selectbox("Select the exact item row you are pulling stock from:", options, key="take_select")
         row_idx = results.index[options.index(choice)]
         
@@ -769,7 +783,7 @@ with tab6:
     if results.empty:
         st.error("No parts found matching your query or filters.")
     else:
-        options = [f"{row['Part Name']} (#{row['Part Number']}) | Proj: {row['Project Under']} | PO#: {row['PO Number']} | Loc: {row['Location']} (ID: {row.get('id', 'N/A')})" for idx, row in results.iterrows()]
+        options = [f"{row['Part Name']} (#{row['Part Number']}) | Proj: {row['Project Under']} | PO#: {format_po_number(row['PO Number'])} | Loc: {row['Location']} (ID: {row.get('id', 'N/A')})" for idx, row in results.iterrows()]
         choice = st.selectbox("Select the exact item to edit:", options, key="alter_select")
         row_idx = results.index[options.index(choice)]
         
@@ -786,7 +800,9 @@ with tab6:
         
         col_a1, col_a2, col_a3 = st.columns(3)
         updated_project = col_a1.text_input("Project Under:", value=str(active_df.at[row_idx, 'Project Under']))
-        updated_po = col_a2.text_input("PO Number Ordered Under:", value=str(active_df.at[row_idx, 'PO Number']) if pd.notna(active_df.at[row_idx, 'PO Number']) else "")
+        
+        existing_po_raw = active_df.at[row_idx, 'PO Number']
+        updated_po = col_a2.text_input("PO Number Ordered Under (Optional):", value="" if existing_po_raw == "N/A" else str(existing_po_raw))
         
         current_type = str(active_df.at[row_idx, 'Part Type']) if pd.notna(active_df.at[row_idx, 'Part Type']) else ""
         known_types = sorted([t for t in active_df['Part Type'].dropna().astype(str).unique() if t.strip()])
@@ -805,6 +821,7 @@ with tab6:
             updated_type = selected_type_opt
         
         if st.button("Save Altered Attributes"):
+            final_po = format_po_number(updated_po)
             if not updated_pnum.strip():
                 st.error("Part Number is required.")
             elif not updated_type:
@@ -819,7 +836,7 @@ with tab6:
                     "orig_proj": orig_proj,
                     "new_name": updated_name,
                     "new_proj": updated_project,
-                    "new_po": updated_po,
+                    "new_po": final_po,
                     "new_type": updated_type
                 }
                 st.rerun()
@@ -938,6 +955,7 @@ if low_stock_df.empty:
 else:
     # Reordered columns: Part Name, Part Number, Qty on Hand, PO Number, Project Under
     display_df = low_stock_df[['Part Name', 'Part Number', 'Qty on Hand', 'PO Number', 'Project Under']].copy()
+    display_df['PO Number'] = display_df['PO Number'].apply(format_po_number)
     
     if 'id' in low_stock_df.columns:
         row_ids = low_stock_df['id'].tolist()
@@ -945,7 +963,7 @@ else:
         row_ids = [None] * len(low_stock_df)
         
     display_df.insert(0, "Disregard", False)
-    display_df['Order Qty'] = 0  # Editable column placed at the furthest right
+    display_df['Order Qty'] = 0
     
     edited_df = st.sidebar.data_editor(
         display_df,
@@ -971,7 +989,8 @@ else:
     copy_text_lines = ["Part Name\tPart Number\tCurrent Qty\tPO Under\tProject Under\tOrder Qty"]
     for _, r in edited_df.iterrows():
         order_val = int(r['Order Qty']) if pd.notna(r['Order Qty']) and r['Order Qty'] > 0 else ""
-        copy_text_lines.append(f"{r['Part Name']}\t{r['Part Number']}\t{int(r['Qty on Hand'])}\t{r['PO Number']}\t{r['Project Under']}\t{order_val}")
+        po_val = format_po_number(r['PO Number'])
+        copy_text_lines.append(f"{r['Part Name']}\t{r['Part Number']}\t{int(r['Qty on Hand'])}\t{po_val}\t{r['Project Under']}\t{order_val}")
     raw_copy_str = "\\n".join(copy_text_lines).replace("'", "\\'")
     
     with st.sidebar:
