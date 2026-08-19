@@ -896,7 +896,6 @@ with tab4:
                 show_new_form = True
     else:
         results = filtered_add_pool
-        # Toggle with state persistence
         is_checked = st.checkbox("Register a Brand New Item", value=st.session_state["show_new_part_form"], key="new_item_chk")
         st.session_state["show_new_part_form"] = is_checked
         show_new_form = is_checked
@@ -907,23 +906,24 @@ with tab4:
         new_num = st.text_input("Part Number:", value=add_query if add_query else "", key="new_part_num_input").strip()
         new_name = st.text_input("Part Name:", key="new_part_name_input").strip()
         
-        # Manufacturer selector with dynamic '+ Add New'
+        col_m1, col_m2 = st.columns(2)
+        # 1. Dynamic Manufacturer Selector
         known_mfgs = sorted([m for m in active_df['Manufacturer'].dropna().astype(str).unique() if m.strip() and m != "N/A"])
         mfg_options = ["N/A"] + known_mfgs + ["+ Add New Manufacturer"]
-        selected_mfg_opt = st.selectbox("Manufacturer:", options=mfg_options, key="new_mfg_select")
+        selected_mfg_opt = col_m1.selectbox("Manufacturer:", options=mfg_options, key="new_mfg_select")
         
         if selected_mfg_opt == "+ Add New Manufacturer":
-            new_mfg = st.text_input("Enter New Manufacturer Name:", key="new_mfg_custom").strip()
+            new_mfg = col_m1.text_input("Enter New Manufacturer Name:", key="new_mfg_custom").strip()
         else:
             new_mfg = selected_mfg_opt
         
-        # Part Type selector
+        # 2. Dynamic Part Type Selector
         known_types = sorted([t for t in active_df['Part Type'].dropna().astype(str).unique() if t.strip()])
         type_options = known_types + ["+ Add New Part Type"]
-        selected_type_opt = st.selectbox("Part Type", options=type_options, key="new_part_type_select")
+        selected_type_opt = col_m2.selectbox("Part Type:", options=type_options, key="new_part_type_select")
         
         if selected_type_opt == "+ Add New Part Type":
-            new_type = st.text_input("Enter New Part Type Name:", key="new_part_type_custom").strip()
+            new_type = col_m2.text_input("Enter New Part Type Name:", key="new_part_type_custom").strip()
         else:
             new_type = selected_type_opt
             
@@ -931,8 +931,25 @@ with tab4:
         new_loc = st.text_input("Storage Location (e.g., A1, G3, J2):", key="new_part_loc_input").strip()
         
         col_n1, col_n2 = st.columns(2)
-        new_proj = col_n1.text_input("Project Under:", key="new_part_proj_input").strip()
-        new_po = col_n2.text_input("PO Number Ordered Under (Optional, defaults to N/A):", key="new_part_po_input").strip()
+        # 3. Dynamic Project Selector
+        known_projs = sorted([p for p in active_df['Project Under'].dropna().astype(str).unique() if p.strip()])
+        proj_options = known_projs + ["+ Add New Project"]
+        selected_proj_opt = col_n1.selectbox("Project Under:", options=proj_options, key="new_proj_select")
+        
+        if selected_proj_opt == "+ Add New Project":
+            new_proj = col_n1.text_input("Enter New Project Name:", key="new_proj_custom").strip()
+        else:
+            new_proj = selected_proj_opt
+
+        # 4. Dynamic PO Number Selector
+        known_pos = sorted([po for po in active_df['PO Number'].dropna().astype(str).unique() if po.strip() and po != "N/A"])
+        po_options = ["N/A"] + known_pos + ["+ Add New PO Number"]
+        selected_po_opt = col_n2.selectbox("PO Number Ordered Under (Optional):", options=po_options, key="new_po_select")
+        
+        if selected_po_opt == "+ Add New PO Number":
+            new_po = col_n2.text_input("Enter New PO Number:", key="new_po_custom").strip()
+        else:
+            new_po = selected_po_opt
         
         new_min_qty = st.number_input("Minimum Quantity Alert Threshold (Optional, set 0 for None):", min_value=0, step=10, value=0, key="new_part_min_qty")
         
@@ -958,6 +975,8 @@ with tab4:
                 st.error("Part Name is required.")
             elif not new_type:
                 st.error("Part Type is required.")
+            elif not new_proj:
+                st.error("Project Under is required.")
             elif not valid:
                 st.error(f"Invalid Location '{new_loc}'! Location must be in format Letter+Number (e.g. C4, J2). You can register custom sections in Tab 2.")
             elif not existing_exact.empty:
@@ -1106,7 +1125,7 @@ with tab6:
         updated_pnum = col_edit1.text_input("Part Number:", value=str(orig_pnum))
         updated_name = col_edit2.text_input("Part Name:", value=str(active_df.at[row_idx, 'Part Name']))
         
-        # Dynamic Manufacturer Alter Selector
+        # 1. Dynamic Manufacturer Selector in Alter
         current_mfg = format_na_str(active_df.at[row_idx, 'Manufacturer'])
         known_mfgs = sorted([m for m in active_df['Manufacturer'].dropna().astype(str).unique() if m.strip() and m != "N/A"])
         if current_mfg != "N/A" and current_mfg not in known_mfgs:
@@ -1125,22 +1144,43 @@ with tab6:
         updated_min_qty = col_mfg2.number_input("Minimum Quantity Alert Threshold:", min_value=0, step=10, value=int(active_df.at[row_idx, 'Min Qty']))
         
         col_a1, col_a2, col_a3 = st.columns(3)
-        updated_project = col_a1.text_input("Project Under:", value=str(active_df.at[row_idx, 'Project Under']))
+        # 2. Dynamic Project Selector in Alter
+        current_proj = str(active_df.at[row_idx, 'Project Under'])
+        known_projs = sorted([p for p in active_df['Project Under'].dropna().astype(str).unique() if p.strip()])
+        if current_proj and current_proj not in known_projs:
+            known_projs.append(current_proj)
+        proj_options = known_projs + ["+ Add New Project"]
+        default_proj_idx = proj_options.index(current_proj) if current_proj in proj_options else 0
         
-        existing_po_raw = active_df.at[row_idx, 'PO Number']
-        updated_po = col_a2.text_input("PO Number Ordered Under (Optional):", value="" if existing_po_raw == "N/A" else str(existing_po_raw))
+        selected_proj_opt = col_a1.selectbox("Project Under:", options=proj_options, index=default_proj_idx, key="alter_proj_select")
+        if selected_proj_opt == "+ Add New Project":
+            updated_project = col_a1.text_input("Enter New Project Name:", key="alter_proj_custom").strip()
+        else:
+            updated_project = selected_proj_opt
         
+        # 3. Dynamic PO Selector in Alter
+        current_po = format_na_str(active_df.at[row_idx, 'PO Number'])
+        known_pos = sorted([po for po in active_df['PO Number'].dropna().astype(str).unique() if po.strip() and po != "N/A"])
+        if current_po != "N/A" and current_po not in known_pos:
+            known_pos.append(current_po)
+        po_options = ["N/A"] + known_pos + ["+ Add New PO Number"]
+        default_po_idx = po_options.index(current_po) if current_po in po_options else 0
+        
+        selected_po_opt = col_a2.selectbox("PO Number Ordered Under (Optional):", options=po_options, index=default_po_idx, key="alter_po_select")
+        if selected_po_opt == "+ Add New PO Number":
+            updated_po = col_a2.text_input("Enter New PO Number:", key="alter_po_custom").strip()
+        else:
+            updated_po = selected_po_opt
+        
+        # 4. Dynamic Part Type Selector in Alter
         current_type = str(active_df.at[row_idx, 'Part Type']) if pd.notna(active_df.at[row_idx, 'Part Type']) else ""
         known_types = sorted([t for t in active_df['Part Type'].dropna().astype(str).unique() if t.strip()])
-        
         if current_type and current_type not in known_types:
             known_types.append(current_type)
-        
         type_options = known_types + ["+ Add New Part Type"]
+        default_type_idx = type_options.index(current_type) if current_type in type_options else 0
         
-        default_index = type_options.index(current_type) if current_type in type_options else 0
-        selected_type_opt = col_a3.selectbox("Part Type", options=type_options, index=default_index, key="alter_part_type_select")
-        
+        selected_type_opt = col_a3.selectbox("Part Type:", options=type_options, index=default_type_idx, key="alter_part_type_select")
         if selected_type_opt == "+ Add New Part Type":
             updated_type = col_a3.text_input("Enter New Part Type Name:", key="alter_part_type_custom").strip()
         else:
@@ -1153,6 +1193,8 @@ with tab6:
                 st.error("Part Number is required.")
             elif not updated_type:
                 st.error("Part Type is required.")
+            elif not updated_project:
+                st.error("Project Under is required.")
             else:
                 st.session_state["pending_action"] = {
                     "type": "alter",
