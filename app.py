@@ -76,6 +76,43 @@ def load_permanent_data():
         st.error(f"Error loading inventory: {e}")
         return pd.DataFrame(columns=['id', 'Part Number', 'Part Name', 'Part Type', 'Qty on Hand', 'Location', 'Project Under', 'Min Qty', 'PO Number'])
 
+def load_locations():
+    default_locations = {
+        'A1': 'Downstairs', 'A2': 'Downstairs', 'A3': 'Downstairs',
+        'B1': 'Downstairs', 'B2': 'Downstairs', 'B3': 'Downstairs',
+        'C1': 'Downstairs', 'C2': 'Downstairs', 'C3': 'Downstairs', 'C4': 'Downstairs',
+        'D1': 'Downstairs', 'D2': 'Downstairs', 'D3': 'Downstairs', 'D4': 'Downstairs',
+        'E1': 'Downstairs', 'E2': 'Downstairs', 'E3': 'Downstairs', 'E4': 'Downstairs',
+        'F1': 'Downstairs', 'F2': 'Downstairs', 'F3': 'Downstairs',
+        'G1': 'Upstairs', 'G2': 'Upstairs', 'G3': 'Upstairs',
+        'H1': 'Upstairs', 'H2': 'Upstairs', 'H3': 'Upstairs',
+        'I1': 'Upstairs', 'I2': 'Upstairs', 'I3': 'Upstairs'
+    }
+    try:
+        response = supabase.table("Locations").select("*").execute()
+        df = pd.DataFrame(response.data)
+        if not df.empty:
+            loc_dict = dict(zip(df['Code'].str.upper(), df['Category']))
+            default_locations.update(loc_dict)
+    except Exception:
+        pass
+    return default_locations
+
+def register_new_storage_area(letter, shelves, category):
+    clean_letter = letter.strip().upper()
+    registered_codes = []
+    try:
+        for s in range(1, int(shelves) + 1):
+            code = f"{clean_letter}{s}"
+            supabase.table("Locations").upsert({
+                "Code": code,
+                "Category": category
+            }).execute()
+            registered_codes.append(code)
+        return True, registered_codes
+    except Exception as e:
+        return False, str(e)
+
 def load_disregarded_items():
     try:
         response = supabase.table("Disregarded_Items").select("*").execute()
@@ -143,13 +180,19 @@ def log_event(action, part_num, part_name, details, project_under="", part_type=
     except Exception as e:
         st.error(f"Error logging event: {e}")
 
-def is_valid_location(loc_string):
+def is_valid_location(loc_string, location_dict):
     clean_loc = loc_string.strip().upper()
-    pattern = r"^([C-E][1-4]|[A-B][1-3]|[F-I][1-3])$"
-    return bool(re.match(pattern, clean_loc)), clean_loc
+    # Accept if present in location table/dict or matches format Pattern (Letter + Number)
+    if clean_loc in location_dict:
+        return True, clean_loc
+    if re.match(r"^[A-Z][0-9]{1,2}$", clean_loc):
+        return True, clean_loc
+    return False, clean_loc
 
-def get_location_category(loc_string):
+def get_location_category(loc_string, location_dict):
     clean_loc = loc_string.strip().upper()
+    if clean_loc in location_dict:
+        return location_dict[clean_loc]
     if re.match(r"^[G-I]", clean_loc):
         return "Upstairs"
     elif re.match(r"^[A-F]", clean_loc):
@@ -372,6 +415,7 @@ if not st.session_state["authenticated"]:
 
 st.title("Panel Shop Inventory System")
 df = load_permanent_data()
+location_dict = load_locations()
 active_df = df.copy()
 
 tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
@@ -430,7 +474,7 @@ with tab1:
                         st.caption("Quantity")
                         st.markdown(f"### {int(row['Qty on Hand'])}")
                     with col5:
-                        loc_cat = get_location_category(str(row['Location']))
+                        loc_cat = get_location_category(str(row['Location']), location_dict)
                         st.caption("Location")
                         st.markdown(f"### [{row['Location']}] *({loc_cat})*")
                     with col6:
@@ -454,20 +498,22 @@ with tab1:
         else:
             st.error(f"No active parts match your search for '{search_query}'.")
 
-# --- TAB 2: LOCATION SEARCH ---
+# --- TAB 2: LOCATION SEARCH & NEW LOCATION CREATOR ---
 with tab2:
     st.header("Search Database by Storage Location")
     
     col_l1, col_l2 = st.columns(2)
-    selected_floor = col_l1.selectbox("Filter by Floor Category:", ["All Floors", "Downstairs (A-F Sections)", "Upstairs (G-I Sections)"], key="floor_select")
-    loc_search_query = col_l2.text_input("Or TYPE Specific Location Code (e.g. C3, G1, H2):", key="loc_search_input").strip().upper()
+    selected_floor = col_l1.selectbox("Filter by Floor Category:", ["All Floors", "Downstairs", "Upstairs"], key="floor_select")
+    loc_search_query = col_l2.text_input("Or TYPE Specific Location Code (e.g. C3, G1, J2):", key="loc_search_input").strip().upper()
     
     results = active_df.copy()
     
-    if selected_floor == "Downstairs (A-F Sections)":
-        results = results[results['Location'].astype(str).str.upper().str.match(r"^[A-F]")]
-    elif selected_floor == "Upstairs (G-I Sections)":
-        results = results[results['Location'].astype(str).str.upper().str.match(r"^[G-I]")]
+    if selected_floor == "Downstairs":
+        downstairs_codes = [code for code, cat in location_dict.items() if cat == "Downstairs"]
+        results = results[results['Location'].astype(str).str.upper().isin(downstairs_codes) | results['Location'].astype(str).str.upper().str.match(r"^[A-F]")]
+    elif selected_floor == "Upstairs":
+        upstairs_codes = [code for code, cat in location_dict.items() if cat == "Upstairs"]
+        results = results[results['Location'].astype(str).str.upper().isin(upstairs_codes) | results['Location'].astype(str).str.upper().str.match(r"^[G-I]")]
         
     if loc_search_query:
         norm_loc = normalize_str(loc_search_query)
@@ -492,7 +538,7 @@ with tab2:
                     st.caption("Quantity")
                     st.markdown(f"### {int(row['Qty on Hand'])}")
                 with col5:
-                    loc_cat = get_location_category(str(row['Location']))
+                    loc_cat = get_location_category(str(row['Location']), location_dict)
                     st.caption("Location")
                     st.markdown(f"### [{row['Location']}] *({loc_cat})*")
                 with col6:
@@ -516,6 +562,28 @@ with tab2:
     else:
         st.warning("No items found matching the selected location filters.")
 
+    # --- DYNAMIC STORAGE ADDITION FORM ---
+    st.markdown("---")
+    with st.expander("➕ Add / Register New Storage Area (Letters & Shelves)", expanded=False):
+        st.write("Register a new storage section to expand shop capacity:")
+        
+        col_new_l1, col_new_l2, col_new_l3 = st.columns(3)
+        new_letter = col_new_l1.text_input("Section Alphabetical Letter (e.g. J, K, L):", max_chars=2).strip().upper()
+        new_shelves = col_new_l2.number_input("Number of Shelves/Sections (e.g. 4 creates J1-J4):", min_value=1, max_value=20, value=3)
+        new_floor_cat = col_new_l3.selectbox("Storage Area Level:", ["Downstairs", "Upstairs"])
+        
+        if st.button("Register Storage Section"):
+            if not new_letter or not new_letter.isalpha():
+                st.error("Please enter a valid alphabetical letter for the section.")
+            else:
+                success, created_codes = register_new_storage_area(new_letter, new_shelves, new_floor_cat)
+                if success:
+                    st.success(f"Successfully registered storage locations: {', '.join(created_codes)} ({new_floor_cat})!")
+                    log_event("Added Location", f"{new_letter}1-{new_letter}{new_shelves}", "New Storage Section", f"Created {new_shelves} shelves at {new_floor_cat}")
+                    st.rerun()
+                else:
+                    st.error(f"Error registering storage section: {created_codes}")
+
 # --- TAB 3: PROJECT & PO SEARCH ---
 with tab3:
     st.header("Search Database by Project Under or PO Number")
@@ -527,7 +595,7 @@ with tab3:
     selected_proj_dropdown = col_p1.selectbox("Select from existing projects:", known_projects, key="proj_search_select")
     proj_search_query = col_p2.text_input("Or TYPE a project name:", key="proj_search_input").strip()
     
-    known_pos = ["Select a PO Number..."] + sorted([po for po in active_df['PO Number'].dropna().astype(str).unique() if po.strip()])
+    known_pos = ["Select a PO Number..."] + sorted([po for po in active_df['PO Number'].dropna().astype(str).unique() if po.strip() and po != 'N/A'])
     selected_po_dropdown = col_po1.selectbox("Select from existing PO numbers:", known_pos, key="po_search_select")
     po_search_query = col_po2.text_input("Or TYPE a PO number:", key="po_search_input").strip()
     
@@ -570,7 +638,7 @@ with tab3:
                         st.caption("Quantity")
                         st.markdown(f"### {int(row['Qty on Hand'])}")
                     with col5:
-                        loc_cat = get_location_category(str(row['Location']))
+                        loc_cat = get_location_category(str(row['Location']), location_dict)
                         st.caption("Location")
                         st.markdown(f"### [{row['Location']}] *({loc_cat})*")
                     with col6:
@@ -641,7 +709,7 @@ with tab4:
             new_type = selected_type_opt
             
         new_qty = st.number_input("Initial Quantity:", min_value=1, step=10, value=10)
-        new_loc = st.text_input("Storage Location (Downstairs: A1-F3, Upstairs: G1-I3):")
+        new_loc = st.text_input("Storage Location (e.g., A1-F3 downstairs, G1-I3 upstairs, or registered area):")
         
         col_n1, col_n2 = st.columns(2)
         new_proj = col_n1.text_input("Project Under:")
@@ -650,7 +718,7 @@ with tab4:
         new_min_qty = st.number_input("Minimum Quantity Alert Threshold (Optional, set 0 for None):", min_value=0, step=10, value=0)
         
         if st.button("Save Brand New Item"):
-            valid, formatted_loc = is_valid_location(new_loc)
+            valid, formatted_loc = is_valid_location(new_loc, location_dict)
             final_po = format_po_number(new_po)
             
             if not new_num.strip():
@@ -658,7 +726,7 @@ with tab4:
             elif not new_type:
                 st.error("Part Type is required.")
             elif not valid:
-                st.error("Invalid Location! Allowed Downstairs: A1-A3, B1-B3, C1-C4, D1-D4, E1-E4, F1-F3 | Allowed Upstairs: G1-G3, H1-H3, I1-I3")
+                st.error(f"Invalid Location '{new_loc}'! Location must be in format Letter+Number (e.g. C4, J2). You can register custom sections in Tab 2.")
             else:
                 st.session_state["pending_action"] = {
                     "type": "add",
@@ -856,11 +924,11 @@ with tab7:
             choice = st.selectbox("Select the item listing you want to move:", options, key="loc_select")
             row_idx = results.index[options.index(choice)]
             
-            new_location = st.text_input("Enter new location code (Downstairs: A1-F3, Upstairs: G1-I3):")
+            new_location = st.text_input("Enter new location code (e.g. A1, G3, J2):")
             if st.button("Update Location"):
-                valid, formatted_loc = is_valid_location(new_location)
+                valid, formatted_loc = is_valid_location(new_location, location_dict)
                 if not valid:
-                    st.error("Invalid Location! Allowed Downstairs: A1-A3, B1-B3, C1-C4, D1-D4, E1-E4, F1-F3 | Allowed Upstairs: G1-G3, H1-H3, I1-I3")
+                    st.error(f"Invalid Location '{new_location}'! Format must be Letter+Number (e.g. C3, J1). Register new sections in Tab 2.")
                 else:
                     target_id = active_df.at[row_idx, 'id'] if 'id' in active_df.columns else None
                     old_loc = active_df.at[row_idx, 'Location']
@@ -877,7 +945,7 @@ with tab7:
                     query.execute()
                     
                     log_event("Moved", part_num, part_name, f"Moved from {old_loc} to {formatted_loc}", project_under=proj_name, part_type=p_type)
-                    st.success(f"Location updated to [{formatted_loc}] ({get_location_category(formatted_loc)})!")
+                    st.success(f"Location updated to [{formatted_loc}] ({get_location_category(formatted_loc, location_dict)})!")
                     st.rerun()
 
 # --- TAB 8: LOG HISTORY WITH CALENDAR DATE SEARCH ---
@@ -909,7 +977,7 @@ with tab8:
             st.rerun()
 
         col_l1, col_l2, col_l3 = st.columns(3)
-        action_filter = col_l1.selectbox("Filter by Action:", ["All", "Added", "Removed", "Moved", "Altered", "Disregarded"])
+        action_filter = col_l1.selectbox("Filter by Action:", ["All", "Added", "Removed", "Moved", "Altered", "Disregarded", "Added Location"])
         log_proj_filter = col_l2.selectbox("Filter by Project Under:", ["All Projects"] + sorted(list(set(log_df['Project Under'].dropna().astype(str).unique()))))
         log_type_filter = col_l3.selectbox("Filter by Part Type:", ["All Part Types"] + sorted([t for t in log_df['Part Type'].dropna().astype(str).unique() if t.strip()]))
         
@@ -943,7 +1011,7 @@ st.sidebar.header("Live Inventory Grid View")
 display_sidebar_df = active_df.drop(columns=['id'], errors='ignore')
 st.sidebar.dataframe(display_sidebar_df, use_container_width=True)
 
-# --- SIDEBAR: LOW / OUT OF STOCK TABLE & DISREGARD ACTION ---
+# --- SIDEBAR: LOW / OUT OF STOCK TABLE (WITH EDITABLE PO AND ORDER QTY) ---
 st.sidebar.markdown("---")
 st.sidebar.header("⚠️ Low / Out of Stock Items")
 
@@ -978,13 +1046,31 @@ else:
             "Part Name": st.column_config.TextColumn("Part Name", disabled=True),
             "Part Number": st.column_config.TextColumn("Part Number", disabled=True),
             "Qty on Hand": st.column_config.NumberColumn("Current Qty", disabled=True),
-            "PO Number": st.column_config.TextColumn("PO Under", disabled=True),
+            "PO Number": st.column_config.TextColumn("PO Under", help="Click to edit PO#; leaving blank sets to N/A"),
             "Project Under": st.column_config.TextColumn("Project Under", disabled=True),
             "Order Qty": st.column_config.NumberColumn("Order Qty", min_value=0, step=1, help="Type quantity needed for purchase email")
         },
         key="low_stock_editor"
     )
     
+    # Check for direct PO edits in data editor and update Supabase seamlessly
+    for idx, r in edited_df.iterrows():
+        current_entered_po = format_po_number(r['PO Number'])
+        original_po = display_df.loc[idx, 'PO Number']
+        if current_entered_po != original_po:
+            target_id = row_ids[idx]
+            p_num = r['Part Number']
+            p_proj = r['Project Under']
+            
+            query = supabase.table("Inventory").update({"PO Number": current_entered_po})
+            if target_id is not None and pd.notna(target_id):
+                query = query.eq("id", target_id)
+            else:
+                query = query.eq("Part Number", str(p_num)).eq("Project Under", str(p_proj))
+            query.execute()
+            log_event("Altered", p_num, r['Part Name'], f"Updated PO# from {original_po} to {current_entered_po}", project_under=p_proj)
+            st.rerun()
+
     # Generate Clipboard Text including typed Order Qty
     copy_text_lines = ["Part Name\tPart Number\tCurrent Qty\tPO Under\tProject Under\tOrder Qty"]
     for _, r in edited_df.iterrows():
