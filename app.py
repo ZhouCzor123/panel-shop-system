@@ -541,16 +541,23 @@ def show_confirmation_dialog():
 if st.session_state.get("pending_action"):
     show_confirmation_dialog()
 
-# --- AUTHENTICATION ---
+# --- PERSISTENT AUTHENTICATION (URL TOKEN + SESSION STATE) ---
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
+
+# Auto-login if auth parameter is already preserved in URL query parameters
+if st.query_params.get("auth") == PASSWORD:
+    st.session_state["authenticated"] = True
 
 if not st.session_state["authenticated"]:
     st.title("Panel Shop Inventory Login")
     user_pass = st.text_input("Enter Shop Password:", type="password")
-    if st.button("Login"):
+    
+    col_auth1, col_auth2 = st.columns([1, 2])
+    if col_auth1.button("Login", type="primary"):
         if user_pass == PASSWORD:
             st.session_state["authenticated"] = True
+            st.query_params["auth"] = PASSWORD  # Persist token in URL across idle timeouts
             st.rerun()
         else:
             st.error("Incorrect Password. Access Denied.")
@@ -1434,8 +1441,13 @@ else:
             }
             st.rerun()
 
-# --- Sidebar Footer ---
+# --- Sidebar Footer & Log Out Option ---
 st.sidebar.markdown("---")
+if st.sidebar.button("🔒 Log Out", use_container_width=True):
+    st.session_state["authenticated"] = False
+    st.query_params.clear()
+    st.rerun()
+
 st.sidebar.markdown(
     """
     <div style='text-align: center; color: gray; font-size: 0.8em;'>
