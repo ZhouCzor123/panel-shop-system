@@ -1440,7 +1440,7 @@ st.sidebar.markdown(
     """
     <div style='text-align: center; color: gray; font-size: 0.8em;'>
         <b>Panel Shop Inventory System v2.0</b><br>
-        Designed & Built by <b>Zhou Czornoba</b><br>
+        Built & Designed by <b>Zhou Czornoba</b><br>
         Co-op Term May-August 2026
     </div>
     """, 
