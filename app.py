@@ -113,6 +113,37 @@ def register_new_storage_area(letter, shelves, category):
     except Exception as e:
         return False, str(e)
 
+def alter_storage_area(letter, new_shelves, new_category, location_dict):
+    clean_letter = letter.strip().upper()
+    try:
+        # Delete existing section codes from database table
+        existing_in_letter = [code for code in location_dict.keys() if re.match(rf"^{clean_letter}[0-9]+$", code)]
+        for code in existing_in_letter:
+            supabase.table("Locations").delete().eq("Code", code).execute()
+        
+        # Insert updated shelf counts and level category
+        registered_codes = []
+        for s in range(1, int(new_shelves) + 1):
+            code = f"{clean_letter}{s}"
+            supabase.table("Locations").upsert({
+                "Code": code,
+                "Category": new_category
+            }).execute()
+            registered_codes.append(code)
+        return True, registered_codes
+    except Exception as e:
+        return False, str(e)
+
+def delete_storage_area(letter, location_dict):
+    clean_letter = letter.strip().upper()
+    try:
+        existing_in_letter = [code for code in location_dict.keys() if re.match(rf"^{clean_letter}[0-9]+$", code)]
+        for code in existing_in_letter:
+            supabase.table("Locations").delete().eq("Code", code).execute()
+        return True, existing_in_letter
+    except Exception as e:
+        return False, str(e)
+
 def load_disregarded_items():
     try:
         response = supabase.table("Disregarded_Items").select("*").execute()
@@ -182,7 +213,6 @@ def log_event(action, part_num, part_name, details, project_under="", part_type=
 
 def is_valid_location(loc_string, location_dict):
     clean_loc = loc_string.strip().upper()
-    # Accept if present in location table/dict or matches format Pattern (Letter + Number)
     if clean_loc in location_dict:
         return True, clean_loc
     if re.match(r"^[A-Z][0-9]{1,2}$", clean_loc):
@@ -374,6 +404,107 @@ def show_confirmation_dialog():
             st.session_state["pending_action"] = None
             st.rerun()
 
+    elif action_type == "move_part":
+        part_num = action_data["part_num"]
+        part_name = action_data["part_name"]
+        old_loc = action_data["old_loc"]
+        new_loc = action_data["new_loc"]
+        proj_name = action_data["proj_name"]
+        p_type = action_data["p_type"]
+        target_id = action_data.get("target_id")
+
+        st.write(f"Are you sure you want to move **{part_name}** (`{part_num}`)?")
+        st.write(f"- **Current Location:** [{old_loc}]")
+        st.write(f"- **New Location:** [{new_loc}]")
+
+        col1, col2 = st.columns(2)
+        if col1.button("Yes, Confirm Move", type="primary"):
+            query = supabase.table("Inventory").update({"Location": new_loc})
+            if target_id is not None and pd.notna(target_id):
+                query = query.eq("id", target_id)
+            else:
+                query = query.eq("Part Number", str(part_num)).eq("Location", str(old_loc)).eq("Project Under", str(proj_name))
+            query.execute()
+            
+            log_event("Moved", part_num, part_name, f"Moved from {old_loc} to {new_loc}", project_under=proj_name, part_type=p_type)
+            st.session_state["pending_action"] = None
+            st.success(f"Location updated to [{new_loc}]!")
+            st.rerun()
+
+        if col2.button("No, Cancel"):
+            st.session_state["pending_action"] = None
+            st.rerun()
+
+    elif action_type == "add_location":
+        letter = action_data["letter"]
+        shelves = action_data["shelves"]
+        category = action_data["category"]
+
+        st.write(f"Are you sure you want to register new storage area **Section {letter}**?")
+        st.write(f"- **Shelves/Codes:** {letter}1 to {letter}{shelves}")
+        st.write(f"- **Level:** {category}")
+
+        col1, col2 = st.columns(2)
+        if col1.button("Yes, Register Section", type="primary"):
+            success, created_codes = register_new_storage_area(letter, shelves, category)
+            if success:
+                log_event("Added Location", f"{letter}1-{letter}{shelves}", "New Storage Section", f"Created {shelves} shelves at {category}")
+                st.session_state["pending_action"] = None
+                st.success(f"Successfully registered storage locations: {', '.join(created_codes)} ({category})!")
+                st.rerun()
+            else:
+                st.error(f"Error registering storage section: {created_codes}")
+
+        if col2.button("No, Cancel"):
+            st.session_state["pending_action"] = None
+            st.rerun()
+
+    elif action_type == "alter_location":
+        letter = action_data["letter"]
+        shelves = action_data["shelves"]
+        category = action_data["category"]
+        loc_dict = action_data["loc_dict"]
+
+        st.write(f"Are you sure you want to alter storage configuration for **Section {letter}**?")
+        st.write(f"- **New Configuration:** {letter}1 to {letter}{shelves}")
+        st.write(f"- **Level Category:** {category}")
+
+        col1, col2 = st.columns(2)
+        if col1.button("Yes, Save Section Changes", type="primary"):
+            success, codes = alter_storage_area(letter, shelves, category, loc_dict)
+            if success:
+                log_event("Altered Location", f"{letter}1-{letter}{shelves}", "Storage Section Config", f"Updated to {shelves} shelves at {category}")
+                st.session_state["pending_action"] = None
+                st.success(f"Successfully updated Section {letter} configuration!")
+                st.rerun()
+            else:
+                st.error(f"Error updating section: {codes}")
+
+        if col2.button("No, Cancel"):
+            st.session_state["pending_action"] = None
+            st.rerun()
+
+    elif action_type == "delete_location":
+        letter = action_data["letter"]
+        loc_dict = action_data["loc_dict"]
+
+        st.write(f"Are you sure you want to permanently delete **Section {letter}** and all its shelves?")
+
+        col1, col2 = st.columns(2)
+        if col1.button("Yes, Delete Section", type="primary"):
+            success, deleted_codes = delete_storage_area(letter, loc_dict)
+            if success:
+                log_event("Deleted Location", f"Section {letter}", "Deleted Storage Section", f"Removed codes: {', '.join(deleted_codes)}")
+                st.session_state["pending_action"] = None
+                st.success(f"Successfully deleted Section {letter}!")
+                st.rerun()
+            else:
+                st.error(f"Error deleting section: {deleted_codes}")
+
+        if col2.button("No, Cancel"):
+            st.session_state["pending_action"] = None
+            st.rerun()
+
     elif action_type == "disregard":
         disregarded_rows = action_data["rows"]
         st.write("Are you sure you want to disregard and permanently remove the following out-of-stock item(s)?")
@@ -498,91 +629,144 @@ with tab1:
         else:
             st.error(f"No active parts match your search for '{search_query}'.")
 
-# --- TAB 2: LOCATION SEARCH & NEW LOCATION CREATOR ---
+# --- TAB 2: LOCATION SEARCH & COMPREHENSIVE STORAGE MANAGEMENT ---
 with tab2:
     st.header("Search Database by Storage Location")
     
     col_l1, col_l2 = st.columns(2)
-    selected_floor = col_l1.selectbox("Filter by Floor Category:", ["All Floors", "Downstairs", "Upstairs"], key="floor_select")
+    selected_floor = col_l1.selectbox("Filter by Floor Category:", ["Select a Floor Filter...", "Downstairs", "Upstairs"], key="floor_select")
     loc_search_query = col_l2.text_input("Or TYPE Specific Location Code (e.g. C3, G1, J2):", key="loc_search_input").strip().upper()
     
+    has_location_filter = False
     results = active_df.copy()
     
     if selected_floor == "Downstairs":
         downstairs_codes = [code for code, cat in location_dict.items() if cat == "Downstairs"]
         results = results[results['Location'].astype(str).str.upper().isin(downstairs_codes) | results['Location'].astype(str).str.upper().str.match(r"^[A-F]")]
+        has_location_filter = True
     elif selected_floor == "Upstairs":
         upstairs_codes = [code for code, cat in location_dict.items() if cat == "Upstairs"]
         results = results[results['Location'].astype(str).str.upper().isin(upstairs_codes) | results['Location'].astype(str).str.upper().str.match(r"^[G-I]")]
+        has_location_filter = True
         
     if loc_search_query:
         norm_loc = normalize_str(loc_search_query)
         results = results[results['Location'].apply(normalize_str) == norm_loc]
+        has_location_filter = True
         
-    if not results.empty:
-        st.success(f"Found {len(results)} item(s) in selected location filter:")
-        for idx, row in results.iterrows():
-            with st.container():
-                col1, col2, col3, col4, col5, col6, col7 = st.columns([1.8, 2.2, 1.3, 1.0, 1.5, 1.3, 1.2])
-                
-                with col1:
-                    st.caption("Part Number")
-                    st.markdown(f"### `{row['Part Number']}`")
-                with col2:
-                    st.caption("Part Name")
-                    st.markdown(f"### {row['Part Name']}")
-                with col3:
-                    st.caption("Part Type")
-                    st.markdown(f"**{row['Part Type'] if row.get('Part Type') else 'N/A'}**")
-                with col4:
-                    st.caption("Quantity")
-                    st.markdown(f"### {int(row['Qty on Hand'])}")
-                with col5:
-                    loc_cat = get_location_category(str(row['Location']), location_dict)
-                    st.caption("Location")
-                    st.markdown(f"### [{row['Location']}] *({loc_cat})*")
-                with col6:
-                    st.caption("Project / PO#")
-                    st.markdown(f"**Proj:** {row['Project Under']}\n\n**PO#:** {format_po_number(row.get('PO Number'))}")
-                with col7:
-                    st.caption("Min Qty Limit")
-                    st.markdown(f"### {int(row['Min Qty']) if pd.notna(row['Min Qty']) else 0}")
-                
-                barcode_img = generate_barcode_image(str(row['Part Number']))
-                if barcode_img:
-                    st.image(barcode_img, caption=f"Visual Label Representation for {row['Part Number']}", width=300)
-                    st.download_button(
-                        label=f"Download Printable Label for {row['Part Number']}",
-                        data=barcode_img,
-                        file_name=f"label_{row['Part Number']}.png",
-                        mime="image/png",
-                        key=f"dl_loc_{idx}"
-                    )
-                st.markdown("---")
+    if has_location_filter:
+        if not results.empty:
+            st.success(f"Found {len(results)} item(s) in selected location filter:")
+            for idx, row in results.iterrows():
+                with st.container():
+                    col1, col2, col3, col4, col5, col6, col7 = st.columns([1.8, 2.2, 1.3, 1.0, 1.5, 1.3, 1.2])
+                    
+                    with col1:
+                        st.caption("Part Number")
+                        st.markdown(f"### `{row['Part Number']}`")
+                    with col2:
+                        st.caption("Part Name")
+                        st.markdown(f"### {row['Part Name']}")
+                    with col3:
+                        st.caption("Part Type")
+                        st.markdown(f"**{row['Part Type'] if row.get('Part Type') else 'N/A'}**")
+                    with col4:
+                        st.caption("Quantity")
+                        st.markdown(f"### {int(row['Qty on Hand'])}")
+                    with col5:
+                        loc_cat = get_location_category(str(row['Location']), location_dict)
+                        st.caption("Location")
+                        st.markdown(f"### [{row['Location']}] *({loc_cat})*")
+                    with col6:
+                        st.caption("Project / PO#")
+                        st.markdown(f"**Proj:** {row['Project Under']}\n\n**PO#:** {format_po_number(row.get('PO Number'))}")
+                    with col7:
+                        st.caption("Min Qty Limit")
+                        st.markdown(f"### {int(row['Min Qty']) if pd.notna(row['Min Qty']) else 0}")
+                    
+                    barcode_img = generate_barcode_image(str(row['Part Number']))
+                    if barcode_img:
+                        st.image(barcode_img, caption=f"Visual Label Representation for {row['Part Number']}", width=300)
+                        st.download_button(
+                            label=f"Download Printable Label for {row['Part Number']}",
+                            data=barcode_img,
+                            file_name=f"label_{row['Part Number']}.png",
+                            mime="image/png",
+                            key=f"dl_loc_{idx}"
+                        )
+                    st.markdown("---")
+        else:
+            st.warning("No items found matching the selected location criteria.")
     else:
-        st.warning("No items found matching the selected location filters.")
+        st.info("💡 Select a floor category or type a location code above to view stored parts.")
 
-    # --- DYNAMIC STORAGE ADDITION FORM ---
+    # --- DYNAMIC STORAGE MANAGEMENT EXPANDERS ---
     st.markdown("---")
-    with st.expander("➕ Add / Register New Storage Area (Letters & Shelves)", expanded=False):
-        st.write("Register a new storage section to expand shop capacity:")
+    
+    # 1. ADD STORAGE SECTION
+    with st.expander("➕ Register New Storage Section", expanded=False):
+        st.write("Register a new alphabetical storage section with shelves:")
+        col_n1, col_n2, col_n3 = st.columns(3)
+        new_sec_letter = col_n1.text_input("Section Letter (e.g. J, K, L):", max_chars=2, key="add_sec_letter").strip().upper()
+        new_sec_shelves = col_n2.number_input("Number of Shelves (e.g. 4 creates J1-J4):", min_value=1, max_value=20, value=3, key="add_sec_shelves")
+        new_sec_cat = col_n3.selectbox("Floor Level:", ["Downstairs", "Upstairs"], key="add_sec_cat")
         
-        col_new_l1, col_new_l2, col_new_l3 = st.columns(3)
-        new_letter = col_new_l1.text_input("Section Alphabetical Letter (e.g. J, K, L):", max_chars=2).strip().upper()
-        new_shelves = col_new_l2.number_input("Number of Shelves/Sections (e.g. 4 creates J1-J4):", min_value=1, max_value=20, value=3)
-        new_floor_cat = col_new_l3.selectbox("Storage Area Level:", ["Downstairs", "Upstairs"])
-        
-        if st.button("Register Storage Section"):
-            if not new_letter or not new_letter.isalpha():
-                st.error("Please enter a valid alphabetical letter for the section.")
+        if st.button("Save New Storage Section"):
+            if not new_sec_letter or not new_sec_letter.isalpha():
+                st.error("Please enter a valid alphabetical letter.")
             else:
-                success, created_codes = register_new_storage_area(new_letter, new_shelves, new_floor_cat)
-                if success:
-                    st.success(f"Successfully registered storage locations: {', '.join(created_codes)} ({new_floor_cat})!")
-                    log_event("Added Location", f"{new_letter}1-{new_letter}{new_shelves}", "New Storage Section", f"Created {new_shelves} shelves at {new_floor_cat}")
-                    st.rerun()
-                else:
-                    st.error(f"Error registering storage section: {created_codes}")
+                st.session_state["pending_action"] = {
+                    "type": "add_location",
+                    "letter": new_sec_letter,
+                    "shelves": new_sec_shelves,
+                    "category": new_sec_cat
+                }
+                st.rerun()
+
+    # 2. ALTER STORAGE SECTION
+    all_known_letters = sorted(list(set([re.match(r"^([A-Z]+)", k).group(1) for k in location_dict.keys() if re.match(r"^([A-Z]+)", k)])))
+    with st.expander("✏️ Alter Existing Storage Section", expanded=False):
+        st.write("Modify shelf count or move an entire section between Upstairs/Downstairs:")
+        col_alt1, col_alt2, col_alt3 = st.columns(3)
+        selected_alt_letter = col_alt1.selectbox("Select Storage Section Letter to Alter:", all_known_letters, key="alter_sec_select")
+        
+        # Calculate current properties of selected letter
+        curr_codes = [c for c in location_dict.keys() if re.match(rf"^{selected_alt_letter}[0-9]+$", c)]
+        curr_shelves = len(curr_codes) if curr_codes else 3
+        curr_cat = location_dict.get(f"{selected_alt_letter}1", "Downstairs")
+        
+        new_alt_shelves = col_alt2.number_input("Update Number of Shelves:", min_value=1, max_value=20, value=curr_shelves, key="alter_sec_shelves")
+        new_alt_cat = col_alt3.selectbox("Update Floor Level:", ["Downstairs", "Upstairs"], index=0 if curr_cat == "Downstairs" else 1, key="alter_sec_cat")
+        
+        if st.button("Save Storage Section Alterations"):
+            st.session_state["pending_action"] = {
+                "type": "alter_location",
+                "letter": selected_alt_letter,
+                "shelves": new_alt_shelves,
+                "category": new_alt_cat,
+                "loc_dict": location_dict
+            }
+            st.rerun()
+
+    # 3. DELETE STORAGE SECTION (WITH GUARDRAIL FOR EMPTY LOCATIONS)
+    with st.expander("🗑️ Delete Empty Storage Section", expanded=False):
+        st.write("Permanently remove a storage section. **(Must be 100% empty of parts to delete)**")
+        col_del1, col_del2 = st.columns([2, 1])
+        selected_del_letter = col_del1.selectbox("Select Storage Section Letter to Delete:", all_known_letters, key="del_sec_select")
+        
+        if col_del2.button("Delete Storage Section"):
+            # Check if any part in inventory is stored in any shelf of this letter
+            matching_parts = active_df[active_df['Location'].astype(str).str.upper().str.match(rf"^{selected_del_letter}[0-9]+$")]
+            
+            if not matching_parts.empty:
+                st.error(f"⛔ CANNOT DELETE SECTION {selected_del_letter}! There are currently {len(matching_parts)} active part(s) stored here (e.g. {matching_parts.iloc[0]['Part Name']}). Please move or remove all parts from Section {selected_del_letter} before deleting.")
+            else:
+                st.session_state["pending_action"] = {
+                    "type": "delete_location",
+                    "letter": selected_del_letter,
+                    "loc_dict": location_dict
+                }
+                st.rerun()
 
 # --- TAB 3: PROJECT & PO SEARCH ---
 with tab3:
@@ -709,7 +893,7 @@ with tab4:
             new_type = selected_type_opt
             
         new_qty = st.number_input("Initial Quantity:", min_value=1, step=10, value=10)
-        new_loc = st.text_input("Storage Location (e.g., A1-F3 downstairs, G1-I3 upstairs, or registered area):")
+        new_loc = st.text_input("Storage Location (e.g., A1, G3, J2):")
         
         col_n1, col_n2 = st.columns(2)
         new_proj = col_n1.text_input("Project Under:")
@@ -909,7 +1093,7 @@ with tab6:
                 }
                 st.rerun()
 
-# --- TAB 7: CHANGE LOCATION ---
+# --- TAB 7: CHANGE LOCATION (WITH CONFIRMATION MODAL) ---
 with tab7:
     st.header("Move Parts to a New Location")
     loc_query = st.text_input("Type any part number, name, or character fragment to change its LOCATION:", key="loc_input").strip()
@@ -937,15 +1121,16 @@ with tab7:
                     proj_name = active_df.at[row_idx, 'Project Under']
                     p_type = active_df.at[row_idx, 'Part Type']
                     
-                    query = supabase.table("Inventory").update({"Location": formatted_loc})
-                    if target_id is not None and pd.notna(target_id):
-                        query = query.eq("id", target_id)
-                    else:
-                        query = query.eq("Part Number", str(part_num)).eq("Location", str(old_loc)).eq("Project Under", str(proj_name))
-                    query.execute()
-                    
-                    log_event("Moved", part_num, part_name, f"Moved from {old_loc} to {formatted_loc}", project_under=proj_name, part_type=p_type)
-                    st.success(f"Location updated to [{formatted_loc}] ({get_location_category(formatted_loc, location_dict)})!")
+                    st.session_state["pending_action"] = {
+                        "type": "move_part",
+                        "target_id": target_id,
+                        "part_num": part_num,
+                        "part_name": part_name,
+                        "old_loc": old_loc,
+                        "new_loc": formatted_loc,
+                        "proj_name": proj_name,
+                        "p_type": p_type
+                    }
                     st.rerun()
 
 # --- TAB 8: LOG HISTORY WITH CALENDAR DATE SEARCH ---
@@ -977,7 +1162,7 @@ with tab8:
             st.rerun()
 
         col_l1, col_l2, col_l3 = st.columns(3)
-        action_filter = col_l1.selectbox("Filter by Action:", ["All", "Added", "Removed", "Moved", "Altered", "Disregarded", "Added Location"])
+        action_filter = col_l1.selectbox("Filter by Action:", ["All", "Added", "Removed", "Moved", "Altered", "Disregarded", "Added Location", "Altered Location", "Deleted Location"])
         log_proj_filter = col_l2.selectbox("Filter by Project Under:", ["All Projects"] + sorted(list(set(log_df['Project Under'].dropna().astype(str).unique()))))
         log_type_filter = col_l3.selectbox("Filter by Part Type:", ["All Part Types"] + sorted([t for t in log_df['Part Type'].dropna().astype(str).unique() if t.strip()]))
         
