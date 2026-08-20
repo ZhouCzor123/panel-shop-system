@@ -284,21 +284,28 @@ def show_confirmation_dialog():
         mfg = action_data.get("mfg", "N/A")
         current_qty = action_data.get("current_qty", 0)
         target_id = action_data.get("target_id")
+        initial_is_corr = action_data.get("is_correction", False)
+
+        is_corr_dialog = st.checkbox("System Inventory Count Correction (Not a physical delivery/consumption)", value=initial_is_corr)
 
         if is_new:
-            st.write(f"Are you sure you want to register brand new item **{pname}** (`{pnum}`)?")
+            st.write(f"Registering item entry for **{pname}** (`{pnum}`):")
             st.write(f"- **Manufacturer:** {mfg}")
-            st.write(f"- **Initial Quantity:** {amt}")
-            st.write(f"- **Location:** {loc}")
-            st.write(f"- **Project:** {proj}")
+            st.write(f"- **Quantity to Add:** {amt}")
+            st.write(f"- **Target Location:** {loc}")
+            st.write(f"- **Target Project:** {proj}")
             st.write(f"- **PO Number:** {po}")
         else:
-            st.write(f"Are you sure you want to add **{amt}** units to **{pname}** (`{pnum}`)?")
+            st.write(f"Adding **{amt}** units to **{pname}** (`{pnum}`):")
             st.write(f"- **Current Stock:** {current_qty}")
             st.write(f"- **New Total Quantity:** {current_qty + amt}")
+            st.write(f"- **Location:** {loc}")
+            st.write(f"- **Project:** {proj}")
 
         col1, col2 = st.columns(2)
         if col1.button("Yes, Confirm Add", type="primary"):
+            log_action_name = "Corrected (+)" if is_corr_dialog else "Added"
+            
             if is_new:
                 supabase.table("Inventory").insert({
                     "Part Number": str(pnum),
@@ -311,20 +318,21 @@ def show_confirmation_dialog():
                     "PO Number": str(po),
                     "Min Qty": int(min_qty)
                 }).execute()
-                log_event("Added", pnum, pname, f"Registered new item. Initial Qty: {amt} at {loc}. PO#: {po}", project_under=proj, part_type=ptype, manufacturer=mfg)
+                log_event(log_action_name, pnum, pname, f"{'Correction' if is_corr_dialog else 'Added'}: Initial Qty {amt} at {loc}. Proj: {proj}, PO#: {po}", project_under=proj, part_type=ptype, manufacturer=mfg)
             else:
                 query = supabase.table("Inventory").update({
                     "Qty on Hand": current_qty + amt,
                     "Min Qty": int(min_qty),
                     "Location": str(loc),
-                    "Project Under": str(proj)
+                    "Project Under": str(proj),
+                    "PO Number": str(po)
                 })
                 if target_id is not None and pd.notna(target_id):
                     query = query.eq("id", target_id)
                 else:
                     query = query.eq("Part Number", str(pnum)).eq("Location", str(loc)).eq("Project Under", str(proj))
                 query.execute()
-                log_event("Added", pnum, pname, f"Added {amt} units. New Total: {current_qty + amt}.", project_under=proj, part_type=ptype, manufacturer=mfg)
+                log_event(log_action_name, pnum, pname, f"{'Correction' if is_corr_dialog else 'Added'}: Adjusted +{amt} units. New Total: {current_qty + amt}.", project_under=proj, part_type=ptype, manufacturer=mfg)
             
             st.session_state["pending_action"] = None
             st.session_state["show_new_part_form"] = False
@@ -341,14 +349,18 @@ def show_confirmation_dialog():
         ptype, current_qty, min_qty = action_data["ptype"], action_data["current_qty"], action_data["min_qty"]
         mfg = action_data.get("mfg", "N/A")
         target_id = action_data.get("target_id")
+        initial_is_corr = action_data.get("is_correction", False)
         new_stock = current_qty - amt
 
-        st.write(f"Are you sure you want to remove **{amt}** units of **{pname}** (`{pnum}`)?")
+        is_corr_dialog = st.checkbox("System Inventory Count Correction (Not a physical assembly/usage)", value=initial_is_corr)
+
+        st.write(f"Removing **{amt}** units of **{pname}** (`{pnum}`):")
         st.write(f"- **Current Stock:** {current_qty}")
         st.write(f"- **Remaining Stock After Removal:** {max(0, new_stock)}")
 
         col1, col2 = st.columns(2)
         if col1.button("Yes, Confirm Removal", type="primary"):
+            log_action_name = "Corrected (-)" if is_corr_dialog else "Removed"
             query = supabase.table("Inventory").update({"Qty on Hand": max(0, new_stock)})
             if target_id is not None and pd.notna(target_id):
                 query = query.eq("id", target_id)
@@ -357,10 +369,10 @@ def show_confirmation_dialog():
             query.execute()
 
             if new_stock <= 0:
-                log_event("Removed", pnum, pname, f"Removed {amt} units. Stock hit 0.", project_under=proj, part_type=ptype, manufacturer=mfg)
+                log_event(log_action_name, pnum, pname, f"{'Correction' if is_corr_dialog else 'Removed'}: Adjusted -{amt} units. Stock hit 0.", project_under=proj, part_type=ptype, manufacturer=mfg)
                 st.toast(f"🚨 ALERT: {pname} has hit 0 and is completely out of stock!", icon="🚨")
             else:
-                log_event("Removed", pnum, pname, f"Removed {amt} units. Remaining: {new_stock}", project_under=proj, part_type=ptype, manufacturer=mfg)
+                log_event(log_action_name, pnum, pname, f"{'Correction' if is_corr_dialog else 'Removed'}: Adjusted -{amt} units. Remaining: {new_stock}", project_under=proj, part_type=ptype, manufacturer=mfg)
                 if new_stock <= min_qty and min_qty > 0:
                     st.warning(f"⚠️ LOW STOCK ALERT: {pname} is down to {new_stock} units!")
             
@@ -379,34 +391,54 @@ def show_confirmation_dialog():
         new_po, new_type = action_data["new_po"], action_data["new_type"]
         new_mfg = action_data["new_mfg"]
         new_min_qty = action_data["new_min_qty"]
-        target_id = action_data.get("target_id")
+        target_id = action_data["target_id"]
+        merge_target_id = action_data.get("merge_target_id")
+        merge_add_qty = action_data.get("merge_add_qty", 0)
+        dest_curr_qty = action_data.get("dest_curr_qty", 0)
 
-        st.write(f"Are you sure you want to update attributes for **{new_name}**?")
-        st.write(f"- **Part Number:** `{orig_pnum}` → `{new_pnum}`")
-        st.write(f"- **Manufacturer:** {new_mfg}")
-        st.write(f"- **Min Qty Threshold:** {new_min_qty}")
-        st.write(f"- **Project Under:** {new_proj}")
-        st.write(f"- **PO Number:** {new_po}")
-        st.write(f"- **Part Type:** {new_type}")
+        if merge_target_id:
+            st.warning(f"⚠️ Merge Detected: Part `{new_pnum}` already exists under Project '{new_proj}'.")
+            st.write(f"The **{merge_add_qty}** units from this row will be combined into Project '{new_proj}' (New Total: **{dest_curr_qty + merge_add_qty}** units), adopting PO#: **{new_po}**, and this old row will be removed.")
+        else:
+            st.write(f"Are you sure you want to update attributes for **{new_name}**?")
+            st.write(f"- **Part Number:** `{orig_pnum}` → `{new_pnum}`")
+            st.write(f"- **Manufacturer:** {new_mfg}")
+            st.write(f"- **Min Qty Threshold:** {new_min_qty}")
+            st.write(f"- **Project Under:** {new_proj}")
+            st.write(f"- **PO Number:** {new_po}")
+            st.write(f"- **Part Type:** {new_type}")
 
         col1, col2 = st.columns(2)
         if col1.button("Yes, Save Changes", type="primary"):
-            query = supabase.table("Inventory").update({
-                "Part Number": str(new_pnum),
-                "Part Name": str(new_name),
-                "Manufacturer": str(new_mfg),
-                "Min Qty": int(new_min_qty),
-                "Project Under": str(new_proj),
-                "PO Number": str(new_po),
-                "Part Type": str(new_type)
-            })
-            if target_id is not None and pd.notna(target_id):
-                query = query.eq("id", target_id)
+            if merge_target_id:
+                # 1. Update destination row with compiled quantity & new PO
+                supabase.table("Inventory").update({
+                    "Qty on Hand": dest_curr_qty + merge_add_qty,
+                    "PO Number": str(new_po),
+                    "Manufacturer": str(new_mfg),
+                    "Part Type": str(new_type)
+                }).eq("id", merge_target_id).execute()
+
+                # 2. Delete the source row that was merged
+                supabase.table("Inventory").delete().eq("id", target_id).execute()
+                log_event("Compiled / Merged", new_pnum, new_name, f"Transferred {merge_add_qty} units into Project '{new_proj}' (Total: {dest_curr_qty + merge_add_qty}). Old row deleted.", project_under=new_proj, part_type=new_type, manufacturer=new_mfg)
             else:
-                query = query.eq("Part Number", str(orig_pnum))
-            query.execute()
+                query = supabase.table("Inventory").update({
+                    "Part Number": str(new_pnum),
+                    "Part Name": str(new_name),
+                    "Manufacturer": str(new_mfg),
+                    "Min Qty": int(new_min_qty),
+                    "Project Under": str(new_proj),
+                    "PO Number": str(new_po),
+                    "Part Type": str(new_type)
+                })
+                if target_id is not None and pd.notna(target_id):
+                    query = query.eq("id", target_id)
+                else:
+                    query = query.eq("Part Number", str(orig_pnum))
+                query.execute()
+                log_event("Altered", new_pnum, new_name, f"Updated Attributes (Orig P/N: {orig_pnum}, Mfg: {new_mfg}, PO#: {new_po}, MinQty: {new_min_qty}).", project_under=new_proj, part_type=new_type, manufacturer=new_mfg)
             
-            log_event("Altered", new_pnum, new_name, f"Updated Attributes (Orig P/N: {orig_pnum}, Mfg: {new_mfg}, PO#: {new_po}, MinQty: {new_min_qty}).", project_under=new_proj, part_type=new_type, manufacturer=new_mfg)
             st.session_state["pending_action"] = None
             st.success("Part attributes successfully updated!")
             st.rerun()
@@ -545,7 +577,6 @@ if st.session_state.get("pending_action"):
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 
-# Auto-login if auth parameter is already preserved in URL query parameters
 if st.query_params.get("auth") == PASSWORD:
     st.session_state["authenticated"] = True
 
@@ -557,7 +588,7 @@ if not st.session_state["authenticated"]:
     if col_auth1.button("Login", type="primary"):
         if user_pass == PASSWORD:
             st.session_state["authenticated"] = True
-            st.query_params["auth"] = PASSWORD  # Persist token in URL across idle timeouts
+            st.query_params["auth"] = PASSWORD
             st.rerun()
         else:
             st.error("Incorrect Password. Access Denied.")
@@ -875,7 +906,7 @@ with tab3:
         else:
             st.warning("No items currently registered matching selected Project or PO criteria.")
 
-# --- TAB 4: ADD INVENTORY ---
+# --- TAB 4: ADD INVENTORY (WITH STREAMLINED EXISTING-PART CUSTOM ENTRY) ---
 with tab4:
     st.header("Receive / Add Stock")
     
@@ -903,69 +934,50 @@ with tab4:
                 show_new_form = True
     else:
         results = filtered_add_pool
-        is_checked = st.checkbox("Register a Brand New Item", value=st.session_state["show_new_part_form"], key="new_item_chk")
+        is_checked = st.checkbox("Register a Brand New Item (Not yet in database)", value=st.session_state["show_new_part_form"], key="new_item_chk")
         st.session_state["show_new_part_form"] = is_checked
         show_new_form = is_checked
 
     if show_new_form:
-        st.info("Fill out the fields below to register a brand new item:")
+        st.info("Register a brand new, previously unrecorded item:")
         
         new_num = st.text_input("Part Number:", value=add_query if add_query else "", key="new_part_num_input").strip()
         new_name = st.text_input("Part Name:", key="new_part_name_input").strip()
         
         col_m1, col_m2 = st.columns(2)
-        # 1. Dynamic Manufacturer Selector
         known_mfgs = sorted([m for m in active_df['Manufacturer'].dropna().astype(str).unique() if m.strip() and m != "N/A"])
         mfg_options = ["N/A"] + known_mfgs + ["+ Add New Manufacturer"]
         selected_mfg_opt = col_m1.selectbox("Manufacturer:", options=mfg_options, key="new_mfg_select")
+        new_mfg = col_m1.text_input("Enter New Manufacturer Name:", key="new_mfg_custom").strip() if selected_mfg_opt == "+ Add New Manufacturer" else selected_mfg_opt
         
-        if selected_mfg_opt == "+ Add New Manufacturer":
-            new_mfg = col_m1.text_input("Enter New Manufacturer Name:", key="new_mfg_custom").strip()
-        else:
-            new_mfg = selected_mfg_opt
-        
-        # 2. Dynamic Part Type Selector
         known_types = sorted([t for t in active_df['Part Type'].dropna().astype(str).unique() if t.strip()])
         type_options = known_types + ["+ Add New Part Type"]
         selected_type_opt = col_m2.selectbox("Part Type:", options=type_options, key="new_part_type_select")
-        
-        if selected_type_opt == "+ Add New Part Type":
-            new_type = col_m2.text_input("Enter New Part Type Name:", key="new_part_type_custom").strip()
-        else:
-            new_type = selected_type_opt
+        new_type = col_m2.text_input("Enter New Part Type Name:", key="new_part_type_custom").strip() if selected_type_opt == "+ Add New Part Type" else selected_type_opt
             
         new_qty = st.number_input("Initial Quantity:", min_value=1, step=10, value=10, key="new_part_qty_input")
         new_loc = st.text_input("Storage Location (e.g., A1, G3, J2):", key="new_part_loc_input").strip()
         
         col_n1, col_n2 = st.columns(2)
-        # 3. Dynamic Project Selector
         known_projs = sorted([p for p in active_df['Project Under'].dropna().astype(str).unique() if p.strip()])
         proj_options = known_projs + ["+ Add New Project"]
         selected_proj_opt = col_n1.selectbox("Project Under:", options=proj_options, key="new_proj_select")
-        
-        if selected_proj_opt == "+ Add New Project":
-            new_proj = col_n1.text_input("Enter New Project Name:", key="new_proj_custom").strip()
-        else:
-            new_proj = selected_proj_opt
+        new_proj = col_n1.text_input("Enter New Project Name:", key="new_proj_custom").strip() if selected_proj_opt == "+ Add New Project" else selected_proj_opt
 
-        # 4. Dynamic PO Number Selector
         known_pos = sorted([po for po in active_df['PO Number'].dropna().astype(str).unique() if po.strip() and po != "N/A"])
         po_options = ["N/A"] + known_pos + ["+ Add New PO Number"]
         selected_po_opt = col_n2.selectbox("PO Number Ordered Under (Optional):", options=po_options, key="new_po_select")
-        
-        if selected_po_opt == "+ Add New PO Number":
-            new_po = col_n2.text_input("Enter New PO Number:", key="new_po_custom").strip()
-        else:
-            new_po = selected_po_opt
+        new_po = col_n2.text_input("Enter New PO Number:", key="new_po_custom").strip() if selected_po_opt == "+ Add New PO Number" else selected_po_opt
         
         new_min_qty = st.number_input("Minimum Quantity Alert Threshold (Optional, set 0 for None):", min_value=0, step=10, value=0, key="new_part_min_qty")
+        
+        is_corr_new = st.checkbox("Count Correction (Adjusting recorded count)", key="new_part_corr_chk")
         
         if st.button("Save Brand New Item"):
             valid, formatted_loc = is_valid_location(new_loc, location_dict)
             final_po = format_na_str(new_po)
             final_mfg = format_na_str(new_mfg)
             
-            # CHECK: Duplicate part at EXACT same location and project
             norm_new_pnum = normalize_str(new_num)
             norm_new_loc = normalize_str(formatted_loc)
             norm_new_proj = normalize_str(new_proj)
@@ -987,7 +999,7 @@ with tab4:
             elif not valid:
                 st.error(f"Invalid Location '{new_loc}'! Location must be in format Letter+Number (e.g. C4, J2). You can register custom sections in Tab 2.")
             elif not existing_exact.empty:
-                st.error(f"⛔ HALTED: Part `{new_num}` is already registered in Location [{formatted_loc}] under Project '{new_proj}'! Please use the 'Receive / Add Stock' selector above to add more units to the existing listing, or specify a different storage location if this is overflow.")
+                st.error(f"⛔ HALTED: Part `{new_num}` is already registered in Location [{formatted_loc}] under Project '{new_proj}'! Please use the 'Receive / Add Stock' selector above to add more units to the existing listing.")
             else:
                 st.session_state["pending_action"] = {
                     "type": "add",
@@ -1000,7 +1012,8 @@ with tab4:
                     "proj": new_proj,
                     "ptype": new_type,
                     "po": final_po,
-                    "min_qty": new_min_qty
+                    "min_qty": new_min_qty,
+                    "is_correction": is_corr_new
                 }
                 st.rerun()
 
@@ -1008,41 +1021,94 @@ with tab4:
         if add_query:
             st.success(f"Found {len(results)} matching item(s):")
         options = [f"{row['Part Name']} (#{row['Part Number']}) | Mfg: {format_na_str(row['Manufacturer'])} | Type: {row['Part Type']} | Proj: {row['Project Under']} | PO#: {format_na_str(row['PO Number'])} | Qty: {row['Qty on Hand']} | Loc: {row['Location']} (ID: {row.get('id', 'N/A')})" for idx, row in results.iterrows()]
-        choice = st.selectbox("Select the exact item row to add stock to:", options, key="add_select")
+        choice = st.selectbox("Select base part template to receive stock for:", options, key="add_select")
         row_idx = results.index[options.index(choice)]
         
-        amt_to_add = st.number_input("How many units are you adding?", min_value=1, step=10, value=10, key="add_amt")
-        new_min_qty = st.number_input(f"Update Minimum Quantity Alert Level (Current: {active_df.at[row_idx, 'Min Qty']}):", min_value=0, step=10, value=int(active_df.at[row_idx, 'Min Qty']))
+        base_pnum = active_df.at[row_idx, 'Part Number']
+        base_pname = active_df.at[row_idx, 'Part Name']
+        base_mfg = format_na_str(active_df.at[row_idx, 'Manufacturer'])
+        base_ptype = active_df.at[row_idx, 'Part Type']
+        curr_row_loc = str(active_df.at[row_idx, 'Location'])
+        curr_row_proj = str(active_df.at[row_idx, 'Project Under'])
+        curr_row_po = format_na_str(active_df.at[row_idx, 'PO Number'])
+        
+        st.markdown("---")
+        st.write(f"Adding Stock Details for **{base_pname}** (`{base_pnum}`):")
+        
+        col_qty1, col_qty2 = st.columns(2)
+        amt_to_add = col_qty1.number_input("How many units are you adding?", min_value=1, step=10, value=10, key="add_amt")
+        new_min_qty = col_qty2.number_input(f"Minimum Quantity Alert Level:", min_value=0, step=10, value=int(active_df.at[row_idx, 'Min Qty']), key="add_min_qty_input")
+        
+        col_add_p, col_add_po = st.columns(2)
+        
+        # Project Selector
+        known_projs = sorted([p for p in active_df['Project Under'].dropna().astype(str).unique() if p.strip()])
+        if curr_row_proj not in known_projs:
+            known_projs.append(curr_row_proj)
+        proj_opts = known_projs + ["+ Add New Project"]
+        default_proj_idx = proj_opts.index(curr_row_proj) if curr_row_proj in proj_opts else 0
+        selected_proj_opt = col_add_p.selectbox("Receive under Project:", options=proj_opts, index=default_proj_idx, key="add_to_proj_select")
+        final_dest_proj = col_add_p.text_input("Enter New Project Name:", key="add_to_proj_custom").strip() if selected_proj_opt == "+ Add New Project" else selected_proj_opt
+        
+        # PO Selector
+        known_pos = sorted([po for po in active_df['PO Number'].dropna().astype(str).unique() if po.strip() and po != "N/A"])
+        if curr_row_po != "N/A" and curr_row_po not in known_pos:
+            known_pos.append(curr_row_po)
+        po_opts = ["N/A"] + known_pos + ["+ Add New PO Number"]
+        default_po_idx = po_opts.index(curr_row_po) if curr_row_po in po_opts else 0
+        selected_po_opt = col_add_po.selectbox("Receive under PO#:", options=po_opts, index=default_po_idx, key="add_to_po_select")
+        final_dest_po = col_add_po.text_input("Enter New PO Number:", key="add_to_po_custom").strip() if selected_po_opt == "+ Add New PO Number" else selected_po_opt
+        
+        final_dest_loc = st.text_input("Receive into Storage Location:", value=curr_row_loc, key="add_to_loc_input").strip().upper()
+        is_corr = st.checkbox("System Count Correction (Inventory discrepancy true-up)", key="add_correction_chk")
         
         if st.button("Confirm Addition"):
-            target_id = active_df.at[row_idx, 'id'] if 'id' in active_df.columns else None
-            target_pnum = active_df.at[row_idx, 'Part Number']
-            target_pname = active_df.at[row_idx, 'Part Name']
-            target_mfg = format_na_str(active_df.at[row_idx, 'Manufacturer'])
-            target_loc = active_df.at[row_idx, 'Location']
-            target_proj = active_df.at[row_idx, 'Project Under']
-            target_po = format_na_str(active_df.at[row_idx, 'PO Number'])
-            target_ptype = active_df.at[row_idx, 'Part Type']
-            current_qty = int(active_df.at[row_idx, 'Qty on Hand'])
-            
-            st.session_state["pending_action"] = {
-                "type": "add",
-                "is_new": False,
-                "target_id": target_id,
-                "pnum": target_pnum,
-                "pname": target_pname,
-                "mfg": target_mfg,
-                "amt": amt_to_add,
-                "loc": target_loc,
-                "proj": target_proj,
-                "ptype": target_ptype,
-                "po": target_po,
-                "current_qty": current_qty,
-                "min_qty": new_min_qty
-            }
-            st.rerun()
+            valid, formatted_dest_loc = is_valid_location(final_dest_loc, location_dict)
+            if not final_dest_proj:
+                st.error("Project Under is required.")
+            elif not valid:
+                st.error(f"Invalid Location '{final_dest_loc}'! Location must be in format Letter+Number (e.g. C4, J2).")
+            else:
+                # Check if matching record exists at exact dest project + dest location
+                norm_pnum = normalize_str(base_pnum)
+                norm_loc = normalize_str(formatted_dest_loc)
+                norm_proj = normalize_str(final_dest_proj)
+                
+                match_existing = active_df[
+                    (active_df['Part Number'].apply(normalize_str) == norm_pnum) &
+                    (active_df['Location'].apply(normalize_str) == norm_loc) &
+                    (active_df['Project Under'].apply(normalize_str) == norm_proj)
+                ]
+                
+                if not match_existing.empty:
+                    match_idx = match_existing.index[0]
+                    target_id = match_existing.at[match_idx, 'id'] if 'id' in match_existing.columns else None
+                    current_qty = int(match_existing.at[match_idx, 'Qty on Hand'])
+                    is_new_entry = False
+                else:
+                    target_id = None
+                    current_qty = 0
+                    is_new_entry = True
 
-# --- TAB 5: TAKE INVENTORY ---
+                st.session_state["pending_action"] = {
+                    "type": "add",
+                    "is_new": is_new_entry,
+                    "target_id": target_id,
+                    "pnum": base_pnum,
+                    "pname": base_pname,
+                    "mfg": base_mfg,
+                    "amt": amt_to_add,
+                    "loc": formatted_dest_loc,
+                    "proj": final_dest_proj,
+                    "ptype": base_ptype,
+                    "po": format_na_str(final_dest_po),
+                    "current_qty": current_qty,
+                    "min_qty": new_min_qty,
+                    "is_correction": is_corr
+                }
+                st.rerun()
+
+# --- TAB 5: TAKE INVENTORY (WITH CORRECTION SELECTOR) ---
 with tab5:
     st.header("Remove / Assemble Stock")
     
@@ -1068,7 +1134,9 @@ with tab5:
         choice = st.selectbox("Select the exact item row you are pulling stock from:", options, key="take_select")
         row_idx = results.index[options.index(choice)]
         
-        amt_to_sub = st.number_input("How many units are you taking for assembly?", min_value=1, step=10, value=10, key="take_amt")
+        amt_to_sub = st.number_input("How many units are you removing?", min_value=1, step=10, value=10, key="take_amt")
+        is_corr_take = st.checkbox("System Count Correction (Inventory discrepancy true-up)", key="take_correction_chk")
+        
         if st.button("Confirm Removal"):
             target_id = active_df.at[row_idx, 'id'] if 'id' in active_df.columns else None
             current_stock = int(active_df.at[row_idx, 'Qty on Hand'])
@@ -1091,11 +1159,12 @@ with tab5:
                 "proj": proj_name,
                 "ptype": p_type,
                 "current_qty": current_stock,
-                "min_qty": min_threshold
+                "min_qty": min_threshold,
+                "is_correction": is_corr_take
             }
             st.rerun()
 
-# --- TAB 6: ALTER PART ---
+# --- TAB 6: ALTER PART (WITH AUTO-COMPILING MERGES) ---
 with tab6:
     st.header("Alter Part Attributes")
     
@@ -1117,7 +1186,7 @@ with tab6:
     if results.empty:
         st.error("No parts found matching your query or filters.")
     else:
-        options = [f"{row['Part Name']} (#{row['Part Number']}) | Mfg: {format_na_str(row['Manufacturer'])} | Proj: {row['Project Under']} | PO#: {format_na_str(row['PO Number'])} | Loc: {row['Location']} (ID: {row.get('id', 'N/A')})" for idx, row in results.iterrows()]
+        options = [f"{row['Part Name']} (#{row['Part Number']}) | Mfg: {format_na_str(row['Manufacturer'])} | Proj: {row['Project Under']} | PO#: {format_na_str(row['PO Number'])} | Qty: {row['Qty on Hand']} | Loc: {row['Location']} (ID: {row.get('id', 'N/A')})" for idx, row in results.iterrows()]
         choice = st.selectbox("Select the exact item to edit:", options, key="alter_select")
         row_idx = results.index[options.index(choice)]
         
@@ -1127,71 +1196,55 @@ with tab6:
         orig_pnum = active_df.at[row_idx, 'Part Number']
         orig_loc = active_df.at[row_idx, 'Location']
         orig_proj = active_df.at[row_idx, 'Project Under']
+        orig_qty = int(active_df.at[row_idx, 'Qty on Hand'])
         
         col_edit1, col_edit2 = st.columns(2)
         updated_pnum = col_edit1.text_input("Part Number:", value=str(orig_pnum))
         updated_name = col_edit2.text_input("Part Name:", value=str(active_df.at[row_idx, 'Part Name']))
         
-        # 1. Dynamic Manufacturer Selector in Alter
+        # 1. Manufacturer Selector
         current_mfg = format_na_str(active_df.at[row_idx, 'Manufacturer'])
         known_mfgs = sorted([m for m in active_df['Manufacturer'].dropna().astype(str).unique() if m.strip() and m != "N/A"])
         if current_mfg != "N/A" and current_mfg not in known_mfgs:
             known_mfgs.append(current_mfg)
         mfg_options = ["N/A"] + known_mfgs + ["+ Add New Manufacturer"]
-        
         default_mfg_idx = mfg_options.index(current_mfg) if current_mfg in mfg_options else 0
         col_mfg1, col_mfg2 = st.columns(2)
         selected_mfg_opt = col_mfg1.selectbox("Manufacturer:", options=mfg_options, index=default_mfg_idx, key="alter_mfg_select")
-        
-        if selected_mfg_opt == "+ Add New Manufacturer":
-            updated_mfg = col_mfg1.text_input("Enter New Manufacturer Name:", key="alter_mfg_custom").strip()
-        else:
-            updated_mfg = selected_mfg_opt
+        updated_mfg = col_mfg1.text_input("Enter New Manufacturer Name:", key="alter_mfg_custom").strip() if selected_mfg_opt == "+ Add New Manufacturer" else selected_mfg_opt
             
         updated_min_qty = col_mfg2.number_input("Minimum Quantity Alert Threshold:", min_value=0, step=10, value=int(active_df.at[row_idx, 'Min Qty']))
         
         col_a1, col_a2, col_a3 = st.columns(3)
-        # 2. Dynamic Project Selector in Alter
+        # 2. Project Selector
         current_proj = str(active_df.at[row_idx, 'Project Under'])
         known_projs = sorted([p for p in active_df['Project Under'].dropna().astype(str).unique() if p.strip()])
         if current_proj and current_proj not in known_projs:
             known_projs.append(current_proj)
         proj_options = known_projs + ["+ Add New Project"]
         default_proj_idx = proj_options.index(current_proj) if current_proj in proj_options else 0
-        
         selected_proj_opt = col_a1.selectbox("Project Under:", options=proj_options, index=default_proj_idx, key="alter_proj_select")
-        if selected_proj_opt == "+ Add New Project":
-            updated_project = col_a1.text_input("Enter New Project Name:", key="alter_proj_custom").strip()
-        else:
-            updated_project = selected_proj_opt
+        updated_project = col_a1.text_input("Enter New Project Name:", key="alter_proj_custom").strip() if selected_proj_opt == "+ Add New Project" else selected_proj_opt
         
-        # 3. Dynamic PO Selector in Alter
+        # 3. PO Selector
         current_po = format_na_str(active_df.at[row_idx, 'PO Number'])
         known_pos = sorted([po for po in active_df['PO Number'].dropna().astype(str).unique() if po.strip() and po != "N/A"])
         if current_po != "N/A" and current_po not in known_pos:
             known_pos.append(current_po)
         po_options = ["N/A"] + known_pos + ["+ Add New PO Number"]
         default_po_idx = po_options.index(current_po) if current_po in po_options else 0
-        
         selected_po_opt = col_a2.selectbox("PO Number Ordered Under (Optional):", options=po_options, index=default_po_idx, key="alter_po_select")
-        if selected_po_opt == "+ Add New PO Number":
-            updated_po = col_a2.text_input("Enter New PO Number:", key="alter_po_custom").strip()
-        else:
-            updated_po = selected_po_opt
+        updated_po = col_a2.text_input("Enter New PO Number:", key="alter_po_custom").strip() if selected_po_opt == "+ Add New PO Number" else selected_po_opt
         
-        # 4. Dynamic Part Type Selector in Alter
+        # 4. Part Type Selector
         current_type = str(active_df.at[row_idx, 'Part Type']) if pd.notna(active_df.at[row_idx, 'Part Type']) else ""
         known_types = sorted([t for t in active_df['Part Type'].dropna().astype(str).unique() if t.strip()])
         if current_type and current_type not in known_types:
             known_types.append(current_type)
         type_options = known_types + ["+ Add New Part Type"]
         default_type_idx = type_options.index(current_type) if current_type in type_options else 0
-        
         selected_type_opt = col_a3.selectbox("Part Type:", options=type_options, index=default_type_idx, key="alter_part_type_select")
-        if selected_type_opt == "+ Add New Part Type":
-            updated_type = col_a3.text_input("Enter New Part Type Name:", key="alter_part_type_custom").strip()
-        else:
-            updated_type = selected_type_opt
+        updated_type = col_a3.text_input("Enter New Part Type Name:", key="alter_part_type_custom").strip() if selected_type_opt == "+ Add New Part Type" else selected_type_opt
         
         if st.button("Save Altered Attributes"):
             final_po = format_na_str(updated_po)
@@ -1203,20 +1256,60 @@ with tab6:
             elif not updated_project:
                 st.error("Project Under is required.")
             else:
-                st.session_state["pending_action"] = {
-                    "type": "alter",
-                    "target_id": target_id,
-                    "orig_pnum": orig_pnum,
-                    "new_pnum": updated_pnum.strip(),
-                    "orig_loc": orig_loc,
-                    "orig_proj": orig_proj,
-                    "new_name": updated_name,
-                    "new_mfg": final_mfg,
-                    "new_min_qty": updated_min_qty,
-                    "new_proj": updated_project,
-                    "new_po": final_po,
-                    "new_type": updated_type
-                }
+                # CHECK FOR COMPILING MERGES: Does target project already have this part in the same location?
+                norm_new_pnum = normalize_str(updated_pnum)
+                norm_new_proj = normalize_str(updated_project)
+                norm_orig_loc = normalize_str(orig_loc)
+                
+                existing_match = active_df[
+                    (active_df['Part Number'].apply(normalize_str) == norm_new_pnum) &
+                    (active_df['Project Under'].apply(normalize_str) == norm_new_proj) &
+                    (active_df['Location'].apply(normalize_str) == norm_orig_loc) &
+                    (active_df['id'] != target_id)
+                ]
+                
+                if not existing_match.empty:
+                    merge_idx = existing_match.index[0]
+                    merge_target_id = existing_match.at[merge_idx, 'id']
+                    dest_curr_qty = int(existing_match.at[merge_idx, 'Qty on Hand'])
+                    dest_po = format_na_str(existing_match.at[merge_idx, 'PO Number'])
+                    
+                    # Adopt the destination PO if destination has one, otherwise keep the updated PO
+                    final_adopted_po = dest_po if dest_po != "N/A" else final_po
+                    
+                    st.session_state["pending_action"] = {
+                        "type": "alter",
+                        "target_id": target_id,
+                        "merge_target_id": merge_target_id,
+                        "merge_add_qty": orig_qty,
+                        "dest_curr_qty": dest_curr_qty,
+                        "orig_pnum": orig_pnum,
+                        "new_pnum": updated_pnum.strip(),
+                        "orig_loc": orig_loc,
+                        "orig_proj": orig_proj,
+                        "new_name": updated_name,
+                        "new_mfg": final_mfg,
+                        "new_min_qty": updated_min_qty,
+                        "new_proj": updated_project,
+                        "new_po": final_adopted_po,
+                        "new_type": updated_type
+                    }
+                else:
+                    st.session_state["pending_action"] = {
+                        "type": "alter",
+                        "target_id": target_id,
+                        "merge_target_id": None,
+                        "orig_pnum": orig_pnum,
+                        "new_pnum": updated_pnum.strip(),
+                        "orig_loc": orig_loc,
+                        "orig_proj": orig_proj,
+                        "new_name": updated_name,
+                        "new_mfg": final_mfg,
+                        "new_min_qty": updated_min_qty,
+                        "new_proj": updated_project,
+                        "new_po": final_po,
+                        "new_type": updated_type
+                    }
                 st.rerun()
 
 # --- TAB 7: CHANGE LOCATION ---
@@ -1290,7 +1383,7 @@ with tab8:
             st.rerun()
 
         col_l1, col_l2, col_l3 = st.columns(3)
-        action_filter = col_l1.selectbox("Filter by Action:", ["All", "Added", "Removed", "Moved", "Altered", "Disregarded", "Added Location", "Altered Location", "Deleted Location"])
+        action_filter = col_l1.selectbox("Filter by Action:", ["All", "Added", "Removed", "Corrected (+)", "Corrected (-)", "Compiled / Merged", "Moved", "Altered", "Disregarded", "Added Location", "Altered Location", "Deleted Location"])
         log_proj_filter = col_l2.selectbox("Filter by Project Under:", ["All Projects"] + sorted(list(set(log_df['Project Under'].dropna().astype(str).unique()))))
         log_type_filter = col_l3.selectbox("Filter by Part Type:", ["All Part Types"] + sorted([t for t in log_df['Part Type'].dropna().astype(str).unique() if t.strip()]))
         
