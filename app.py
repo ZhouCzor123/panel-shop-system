@@ -208,11 +208,10 @@ def log_event(action, part_num, part_name, details, project_under="", part_type=
     except Exception as e:
         st.error(f"Error logging event: {e}")
 
+# Strict location validation: only accepts locations registered in the database/dictionary
 def is_valid_location(loc_string, location_dict):
     clean_loc = loc_string.strip().upper()
     if clean_loc in location_dict:
-        return True, clean_loc
-    if re.match(r"^[A-Z][0-9]{1,2}$", clean_loc):
         return True, clean_loc
     return False, clean_loc
 
@@ -220,11 +219,7 @@ def get_location_category(loc_string, location_dict):
     clean_loc = loc_string.strip().upper()
     if clean_loc in location_dict:
         return location_dict[clean_loc]
-    if re.match(r"^[G-I]", clean_loc):
-        return "Upstairs"
-    elif re.match(r"^[A-F]", clean_loc):
-        return "Downstairs"
-    return "Unknown"
+    return "Unregistered"
 
 def generate_barcode_image(part_number):
     try:
@@ -411,7 +406,6 @@ def show_confirmation_dialog():
         col1, col2 = st.columns(2)
         if col1.button("Yes, Save Changes", type="primary"):
             if merge_target_id:
-                # 1. Update destination row with compiled quantity & new PO
                 supabase.table("Inventory").update({
                     "Qty on Hand": dest_curr_qty + merge_add_qty,
                     "PO Number": str(new_po),
@@ -419,7 +413,6 @@ def show_confirmation_dialog():
                     "Part Type": str(new_type)
                 }).eq("id", merge_target_id).execute()
 
-                # 2. Delete the source row that was merged
                 supabase.table("Inventory").delete().eq("id", target_id).execute()
                 log_event("Compiled / Merged", new_pnum, new_name, f"Transferred {merge_add_qty} units into Project '{new_proj}' (Total: {dest_curr_qty + merge_add_qty}). Old row deleted.", project_under=new_proj, part_type=new_type, manufacturer=new_mfg)
             else:
@@ -906,7 +899,7 @@ with tab3:
         else:
             st.warning("No items currently registered matching selected Project or PO criteria.")
 
-# --- TAB 4: ADD INVENTORY (WITH STREAMLINED EXISTING-PART CUSTOM ENTRY) ---
+# --- TAB 4: ADD INVENTORY ---
 with tab4:
     st.header("Receive / Add Stock")
     
@@ -956,7 +949,7 @@ with tab4:
         new_type = col_m2.text_input("Enter New Part Type Name:", key="new_part_type_custom").strip() if selected_type_opt == "+ Add New Part Type" else selected_type_opt
             
         new_qty = st.number_input("Initial Quantity:", min_value=1, step=10, value=10, key="new_part_qty_input")
-        new_loc = st.text_input("Storage Location (e.g., A1, G3, J2):", key="new_part_loc_input").strip()
+        new_loc = st.text_input("Storage Location (Must be a registered section, e.g. A1, G3, J2):", key="new_part_loc_input").strip()
         
         col_n1, col_n2 = st.columns(2)
         known_projs = sorted([p for p in active_df['Project Under'].dropna().astype(str).unique() if p.strip()])
@@ -997,7 +990,7 @@ with tab4:
             elif not new_proj:
                 st.error("Project Under is required.")
             elif not valid:
-                st.error(f"Invalid Location '{new_loc}'! Location must be in format Letter+Number (e.g. C4, J2). You can register custom sections in Tab 2.")
+                st.error(f"⛔ Location '{new_loc.upper()}' is not registered! You must assign parts to an existing storage location (e.g. A1-I3) or register Section '{new_loc[:1].upper()}' in Tab 2 first.")
             elif not existing_exact.empty:
                 st.error(f"⛔ HALTED: Part `{new_num}` is already registered in Location [{formatted_loc}] under Project '{new_proj}'! Please use the 'Receive / Add Stock' selector above to add more units to the existing listing.")
             else:
@@ -1041,7 +1034,6 @@ with tab4:
         
         col_add_p, col_add_po = st.columns(2)
         
-        # Project Selector
         known_projs = sorted([p for p in active_df['Project Under'].dropna().astype(str).unique() if p.strip()])
         if curr_row_proj not in known_projs:
             known_projs.append(curr_row_proj)
@@ -1050,7 +1042,6 @@ with tab4:
         selected_proj_opt = col_add_p.selectbox("Receive under Project:", options=proj_opts, index=default_proj_idx, key="add_to_proj_select")
         final_dest_proj = col_add_p.text_input("Enter New Project Name:", key="add_to_proj_custom").strip() if selected_proj_opt == "+ Add New Project" else selected_proj_opt
         
-        # PO Selector
         known_pos = sorted([po for po in active_df['PO Number'].dropna().astype(str).unique() if po.strip() and po != "N/A"])
         if curr_row_po != "N/A" and curr_row_po not in known_pos:
             known_pos.append(curr_row_po)
@@ -1067,9 +1058,8 @@ with tab4:
             if not final_dest_proj:
                 st.error("Project Under is required.")
             elif not valid:
-                st.error(f"Invalid Location '{final_dest_loc}'! Location must be in format Letter+Number (e.g. C4, J2).")
+                st.error(f"⛔ Location '{final_dest_loc.upper()}' is not registered! You must assign parts to an existing storage location (e.g. A1-I3) or register Section '{final_dest_loc[:1].upper()}' in Tab 2 first.")
             else:
-                # Check if matching record exists at exact dest project + dest location
                 norm_pnum = normalize_str(base_pnum)
                 norm_loc = normalize_str(formatted_dest_loc)
                 norm_proj = normalize_str(final_dest_proj)
@@ -1108,7 +1098,7 @@ with tab4:
                 }
                 st.rerun()
 
-# --- TAB 5: TAKE INVENTORY (WITH CORRECTION SELECTOR) ---
+# --- TAB 5: TAKE INVENTORY ---
 with tab5:
     st.header("Remove / Assemble Stock")
     
@@ -1164,7 +1154,7 @@ with tab5:
             }
             st.rerun()
 
-# --- TAB 6: ALTER PART (WITH AUTO-COMPILING MERGES) ---
+# --- TAB 6: ALTER PART ---
 with tab6:
     st.header("Alter Part Attributes")
     
@@ -1202,7 +1192,6 @@ with tab6:
         updated_pnum = col_edit1.text_input("Part Number:", value=str(orig_pnum))
         updated_name = col_edit2.text_input("Part Name:", value=str(active_df.at[row_idx, 'Part Name']))
         
-        # 1. Manufacturer Selector
         current_mfg = format_na_str(active_df.at[row_idx, 'Manufacturer'])
         known_mfgs = sorted([m for m in active_df['Manufacturer'].dropna().astype(str).unique() if m.strip() and m != "N/A"])
         if current_mfg != "N/A" and current_mfg not in known_mfgs:
@@ -1216,7 +1205,6 @@ with tab6:
         updated_min_qty = col_mfg2.number_input("Minimum Quantity Alert Threshold:", min_value=0, step=10, value=int(active_df.at[row_idx, 'Min Qty']))
         
         col_a1, col_a2, col_a3 = st.columns(3)
-        # 2. Project Selector
         current_proj = str(active_df.at[row_idx, 'Project Under'])
         known_projs = sorted([p for p in active_df['Project Under'].dropna().astype(str).unique() if p.strip()])
         if current_proj and current_proj not in known_projs:
@@ -1226,7 +1214,6 @@ with tab6:
         selected_proj_opt = col_a1.selectbox("Project Under:", options=proj_options, index=default_proj_idx, key="alter_proj_select")
         updated_project = col_a1.text_input("Enter New Project Name:", key="alter_proj_custom").strip() if selected_proj_opt == "+ Add New Project" else selected_proj_opt
         
-        # 3. PO Selector
         current_po = format_na_str(active_df.at[row_idx, 'PO Number'])
         known_pos = sorted([po for po in active_df['PO Number'].dropna().astype(str).unique() if po.strip() and po != "N/A"])
         if current_po != "N/A" and current_po not in known_pos:
@@ -1236,7 +1223,6 @@ with tab6:
         selected_po_opt = col_a2.selectbox("PO Number Ordered Under (Optional):", options=po_options, index=default_po_idx, key="alter_po_select")
         updated_po = col_a2.text_input("Enter New PO Number:", key="alter_po_custom").strip() if selected_po_opt == "+ Add New PO Number" else selected_po_opt
         
-        # 4. Part Type Selector
         current_type = str(active_df.at[row_idx, 'Part Type']) if pd.notna(active_df.at[row_idx, 'Part Type']) else ""
         known_types = sorted([t for t in active_df['Part Type'].dropna().astype(str).unique() if t.strip()])
         if current_type and current_type not in known_types:
@@ -1256,7 +1242,6 @@ with tab6:
             elif not updated_project:
                 st.error("Project Under is required.")
             else:
-                # CHECK FOR COMPILING MERGES: Does target project already have this part in the same location?
                 norm_new_pnum = normalize_str(updated_pnum)
                 norm_new_proj = normalize_str(updated_project)
                 norm_orig_loc = normalize_str(orig_loc)
@@ -1273,8 +1258,6 @@ with tab6:
                     merge_target_id = existing_match.at[merge_idx, 'id']
                     dest_curr_qty = int(existing_match.at[merge_idx, 'Qty on Hand'])
                     dest_po = format_na_str(existing_match.at[merge_idx, 'PO Number'])
-                    
-                    # Adopt the destination PO if destination has one, otherwise keep the updated PO
                     final_adopted_po = dest_po if dest_po != "N/A" else final_po
                     
                     st.session_state["pending_action"] = {
@@ -1331,7 +1314,7 @@ with tab7:
             if st.button("Update Location"):
                 valid, formatted_loc = is_valid_location(new_location, location_dict)
                 if not valid:
-                    st.error(f"Invalid Location '{new_location}'! Format must be Letter+Number (e.g. C3, J1). Register new sections in Tab 2.")
+                    st.error(f"⛔ Location '{new_location.upper()}' is not registered! You must assign parts to an existing storage location (e.g. A1-I3) or register Section '{new_location[:1].upper()}' in Tab 2 first.")
                 else:
                     target_id = active_df.at[row_idx, 'id'] if 'id' in active_df.columns else None
                     old_loc = active_df.at[row_idx, 'Location']
