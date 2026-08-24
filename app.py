@@ -146,16 +146,17 @@ def delete_storage_area(letter, location_dict):
     except Exception as e:
         return False, str(e)
 
-def delete_inventory_row(row_id, part_num, project_under):
+def delete_inventory_row(row_id, part_num, project_under, location):
     try:
         if row_id is not None and pd.notna(row_id):
             supabase.table("Inventory").delete().eq("id", row_id).execute()
         else:
-            supabase.table("Inventory").delete().eq("Part Number", str(part_num)).eq("Project Under", str(project_under)).execute()
+            supabase.table("Inventory").delete().eq("Part Number", str(part_num)).eq("Project Under", str(project_under)).eq("Location", str(location)).execute()
             
         supabase.table("Disregarded_Items").insert({
             "Part Number": str(part_num),
-            "Project Under": str(project_under)
+            "Project Under": str(project_under),
+            "Location": str(location)
         }).execute()
         st.cache_data.clear()
     except Exception as e:
@@ -552,14 +553,14 @@ def show_confirmation_dialog():
         disregarded_rows = action_data["rows"]
         st.write("Are you sure you want to disregard and permanently remove the following out-of-stock item(s)?")
         for _, r in disregarded_rows.iterrows():
-            st.write(f"- **{r['Part Name']}** (`{r['Part Number']}`) [Project: {r['Project Under']}]")
+            st.write(f"- **{r['Part Name']}** (`{r['Part Number']}`) [Project: {r['Project Under']} | Loc: {r['Location']}]")
 
         col1, col2 = st.columns(2)
         if col1.button("Yes, Confirm Disregard", type="primary"):
             for _, r in disregarded_rows.iterrows():
                 row_id = r.get('id') if 'id' in r and pd.notna(r['id']) else None
-                delete_inventory_row(row_id, r['Part Number'], r['Project Under'])
-                log_event("Disregarded", r['Part Number'], r['Part Name'], f"Disregarded row ID: {row_id}", project_under=r['Project Under'], manufacturer=r.get('Manufacturer', 'N/A'))
+                delete_inventory_row(row_id, r['Part Number'], r['Project Under'], r['Location'])
+                log_event("Disregarded", r['Part Number'], r['Part Name'], f"Disregarded row ID: {row_id} at {r['Location']}", project_under=r['Project Under'], manufacturer=r.get('Manufacturer', 'N/A'))
             st.session_state["pending_action"] = None
             st.success("Item(s) disregarded and deleted from inventory!")
             st.rerun()
@@ -1414,15 +1415,10 @@ low_stock_df = active_df[low_stock_mask].copy()
 if low_stock_df.empty:
     st.sidebar.success("No active low/out-of-stock items needing restock.")
 else:
-    display_df = low_stock_df[['Part Name', 'Part Number', 'Manufacturer', 'Qty on Hand', 'PO Number', 'Project Under']].copy()
+    display_df = low_stock_df[['id', 'Part Name', 'Part Number', 'Manufacturer', 'Qty on Hand', 'Location', 'PO Number', 'Project Under']].copy()
     display_df['PO Number'] = display_df['PO Number'].apply(format_na_str)
     display_df['Manufacturer'] = display_df['Manufacturer'].apply(format_na_str)
     
-    if 'id' in low_stock_df.columns:
-        row_ids = low_stock_df['id'].tolist()
-    else:
-        row_ids = [None] * len(low_stock_df)
-        
     display_df.insert(0, "Disregard", False)
     display_df['Order Qty'] = 0
     
@@ -1431,6 +1427,7 @@ else:
         hide_index=True,
         use_container_width=True,
         column_config={
+            "id": None,  # Keep primary key hidden from view while retaining row-level tracking
             "Disregard": st.column_config.CheckboxColumn(
                 "Disregard",
                 help="Check to remove item permanently from active list",
@@ -1440,6 +1437,7 @@ else:
             "Part Number": st.column_config.TextColumn("Part Number", disabled=True),
             "Manufacturer": st.column_config.TextColumn("Manufacturer", disabled=True),
             "Qty on Hand": st.column_config.NumberColumn("Current Qty", disabled=True),
+            "Location": st.column_config.TextColumn("Loc", disabled=True),
             "PO Number": st.column_config.TextColumn("PO Under", help="Click to edit PO#; leaving blank sets to N/A"),
             "Project Under": st.column_config.TextColumn("Project Under", disabled=True),
             "Order Qty": st.column_config.NumberColumn("Order Qty", min_value=0, step=1, help="Type quantity needed for purchase email")
@@ -1452,26 +1450,27 @@ else:
         current_entered_po = format_na_str(r['PO Number'])
         original_po = display_df.loc[idx, 'PO Number']
         if current_entered_po != original_po:
-            target_id = row_ids[idx]
+            target_id = r.get('id')
             p_num = r['Part Number']
             p_proj = r['Project Under']
+            p_loc = r['Location']
             
             query = supabase.table("Inventory").update({"PO Number": current_entered_po})
             if target_id is not None and pd.notna(target_id):
                 query = query.eq("id", target_id)
             else:
-                query = query.eq("Part Number", str(p_num)).eq("Project Under", str(p_proj))
+                query = query.eq("Part Number", str(p_num)).eq("Project Under", str(p_proj)).eq("Location", str(p_loc))
             query.execute()
             log_event("Altered", p_num, r['Part Name'], f"Updated PO# from {original_po} to {current_entered_po}", project_under=p_proj, manufacturer=r['Manufacturer'])
             st.rerun()
 
     # Generate Clipboard Text including typed Order Qty
-    copy_text_lines = ["Part Name\tPart Number\tManufacturer\tCurrent Qty\tPO Under\tProject Under\tOrder Qty"]
+    copy_text_lines = ["Part Name\tPart Number\tManufacturer\tCurrent Qty\tLocation\tPO Under\tProject Under\tOrder Qty"]
     for _, r in edited_df.iterrows():
         order_val = int(r['Order Qty']) if pd.notna(r['Order Qty']) and r['Order Qty'] > 0 else ""
         po_val = format_na_str(r['PO Number'])
         mfg_val = format_na_str(r['Manufacturer'])
-        copy_text_lines.append(f"{r['Part Name']}\t{r['Part Number']}\t{mfg_val}\t{int(r['Qty on Hand'])}\t{po_val}\t{r['Project Under']}\t{order_val}")
+        copy_text_lines.append(f"{r['Part Name']}\t{r['Part Number']}\t{mfg_val}\t{int(r['Qty on Hand'])}\t{r['Location']}\t{po_val}\t{r['Project Under']}\t{order_val}")
     raw_copy_str = "\\n".join(copy_text_lines).replace("'", "\\'")
     
     with st.sidebar:
@@ -1509,7 +1508,6 @@ else:
         disregarded_rows_to_process = []
         for idx in disregarded_indices:
             row_data = edited_df.loc[idx].to_dict()
-            row_data['id'] = row_ids[idx] if idx < len(row_ids) else None
             disregarded_rows_to_process.append(row_data)
             
         disregarded_df_to_process = pd.DataFrame(disregarded_rows_to_process)
