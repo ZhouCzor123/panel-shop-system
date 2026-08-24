@@ -281,16 +281,16 @@ def show_confirmation_dialog():
         target_id = action_data.get("target_id")
         initial_is_corr = action_data.get("is_correction", False)
 
-        is_corr_dialog = st.checkbox("System Inventory Count Correction (Not a physical delivery/consumption)", value=initial_is_corr)
-
         if is_new:
             st.write(f"Registering item entry for **{pname}** (`{pnum}`):")
             st.write(f"- **Manufacturer:** {mfg}")
-            st.write(f"- **Quantity to Add:** {amt}")
+            st.write(f"- **Initial Quantity:** {amt}")
             st.write(f"- **Target Location:** {loc}")
             st.write(f"- **Target Project:** {proj}")
             st.write(f"- **PO Number:** {po}")
+            is_corr_dialog = False
         else:
+            is_corr_dialog = st.checkbox("System Inventory Count Correction (Not a physical delivery/consumption)", value=initial_is_corr)
             st.write(f"Adding **{amt}** units to **{pname}** (`{pnum}`):")
             st.write(f"- **Current Stock:** {current_qty}")
             st.write(f"- **New Total Quantity:** {current_qty + amt}")
@@ -313,7 +313,7 @@ def show_confirmation_dialog():
                     "PO Number": str(po),
                     "Min Qty": int(min_qty)
                 }).execute()
-                log_event(log_action_name, pnum, pname, f"{'Correction' if is_corr_dialog else 'Added'}: Initial Qty {amt} at {loc}. Proj: {proj}, PO#: {po}", project_under=proj, part_type=ptype, manufacturer=mfg)
+                log_event("Added", pnum, pname, f"Registered new item. Initial Qty {amt} at {loc}. Proj: {proj}, PO#: {po}", project_under=proj, part_type=ptype, manufacturer=mfg)
             else:
                 query = supabase.table("Inventory").update({
                     "Qty on Hand": current_qty + amt,
@@ -345,18 +345,24 @@ def show_confirmation_dialog():
         mfg = action_data.get("mfg", "N/A")
         target_id = action_data.get("target_id")
         initial_is_corr = action_data.get("is_correction", False)
-        new_stock = current_qty - amt
+        
+        actual_deducted = min(current_qty, amt)
+        new_stock = max(0, current_qty - amt)
 
         is_corr_dialog = st.checkbox("System Inventory Count Correction (Not a physical assembly/usage)", value=initial_is_corr)
 
-        st.write(f"Removing **{amt}** units of **{pname}** (`{pnum}`):")
-        st.write(f"- **Current Stock:** {current_qty}")
-        st.write(f"- **Remaining Stock After Removal:** {max(0, new_stock)}")
+        st.write(f"Removing units of **{pname}** (`{pnum}`):")
+        st.write(f"- **Current Stock on Hand:** {current_qty}")
+        if amt > current_qty:
+            st.warning(f"⚠️ Requested removal of **{amt}** units exceeds available stock. Only the remaining **{actual_deducted}** units will be deducted.")
+        else:
+            st.write(f"- **Quantity Deducted:** {actual_deducted}")
+        st.write(f"- **Remaining Stock After Removal:** {new_stock}")
 
         col1, col2 = st.columns(2)
         if col1.button("Yes, Confirm Removal", type="primary"):
             log_action_name = "Corrected (-)" if is_corr_dialog else "Removed"
-            query = supabase.table("Inventory").update({"Qty on Hand": max(0, new_stock)})
+            query = supabase.table("Inventory").update({"Qty on Hand": new_stock})
             if target_id is not None and pd.notna(target_id):
                 query = query.eq("id", target_id)
             else:
@@ -364,10 +370,10 @@ def show_confirmation_dialog():
             query.execute()
 
             if new_stock <= 0:
-                log_event(log_action_name, pnum, pname, f"{'Correction' if is_corr_dialog else 'Removed'}: Adjusted -{amt} units. Stock hit 0.", project_under=proj, part_type=ptype, manufacturer=mfg)
+                log_event(log_action_name, pnum, pname, f"{'Correction' if is_corr_dialog else 'Removed'}: Adjusted -{actual_deducted} units. Stock hit 0.", project_under=proj, part_type=ptype, manufacturer=mfg)
                 st.toast(f"🚨 ALERT: {pname} has hit 0 and is completely out of stock!", icon="🚨")
             else:
-                log_event(log_action_name, pnum, pname, f"{'Correction' if is_corr_dialog else 'Removed'}: Adjusted -{amt} units. Remaining: {new_stock}", project_under=proj, part_type=ptype, manufacturer=mfg)
+                log_event(log_action_name, pnum, pname, f"{'Correction' if is_corr_dialog else 'Removed'}: Adjusted -{actual_deducted} units. Remaining: {new_stock}", project_under=proj, part_type=ptype, manufacturer=mfg)
                 if new_stock <= min_qty and min_qty > 0:
                     st.warning(f"⚠️ LOW STOCK ALERT: {pname} is down to {new_stock} units!")
             
@@ -964,8 +970,6 @@ with tab4:
         
         new_min_qty = st.number_input("Minimum Quantity Alert Threshold (Optional, set 0 for None):", min_value=0, step=10, value=0, key="new_part_min_qty")
         
-        is_corr_new = st.checkbox("Count Correction (Adjusting recorded count)", key="new_part_corr_chk")
-        
         if st.button("Save Brand New Item"):
             valid, formatted_loc = is_valid_location(new_loc, location_dict)
             final_po = format_na_str(new_po)
@@ -1006,7 +1010,7 @@ with tab4:
                     "ptype": new_type,
                     "po": final_po,
                     "min_qty": new_min_qty,
-                    "is_correction": is_corr_new
+                    "is_correction": False
                 }
                 st.rerun()
 
