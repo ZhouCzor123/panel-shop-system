@@ -148,16 +148,28 @@ def delete_storage_area(letter, location_dict):
 
 def delete_inventory_row(row_id, part_num, project_under, location):
     try:
+        # 1. Primary Delete from Inventory
         if row_id is not None and pd.notna(row_id):
             supabase.table("Inventory").delete().eq("id", row_id).execute()
         else:
             supabase.table("Inventory").delete().eq("Part Number", str(part_num)).eq("Project Under", str(project_under)).eq("Location", str(location)).execute()
             
-        supabase.table("Disregarded_Items").insert({
-            "Part Number": str(part_num),
-            "Project Under": str(project_under),
-            "Location": str(location)
-        }).execute()
+        # 2. Safe Archive Insertion (Handles both old and new schema without UI errors)
+        try:
+            supabase.table("Disregarded_Items").insert({
+                "Part Number": str(part_num),
+                "Project Under": str(project_under),
+                "Location": str(location)
+            }).execute()
+        except Exception:
+            try:
+                supabase.table("Disregarded_Items").insert({
+                    "Part Number": str(part_num),
+                    "Project Under": str(project_under)
+                }).execute()
+            except Exception:
+                pass
+                
         st.cache_data.clear()
     except Exception as e:
         st.error(f"Error removing item: {e}")
@@ -1427,7 +1439,7 @@ else:
         hide_index=True,
         use_container_width=True,
         column_config={
-            "id": None,  # Keep primary key hidden from view while retaining row-level tracking
+            "id": None,
             "Disregard": st.column_config.CheckboxColumn(
                 "Disregard",
                 help="Check to remove item permanently from active list",
