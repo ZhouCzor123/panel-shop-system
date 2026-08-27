@@ -269,6 +269,8 @@ def apply_category_filters(dataframe, proj_filter, type_filter):
 # --- STATE-BASED VERIFICATION DIALOGS ---
 if "pending_action" not in st.session_state:
     st.session_state["pending_action"] = None
+if "show_new_part_form" not in st.session_state:
+    st.session_state["show_new_part_form"] = False
 
 @st.dialog("Confirm Action")
 def show_confirmation_dialog():
@@ -289,7 +291,7 @@ def show_confirmation_dialog():
         initial_is_corr = action_data.get("is_correction", False)
 
         if is_new:
-            st.write(f"Registering brand new item entry for **{pname}** (`{pnum}`):")
+            st.write(f"Registering separate stock entry for **{pname}** (`{pnum}`):")
             st.write(f"- **Manufacturer:** {mfg}")
             st.write(f"- **Initial Quantity:** {amt}")
             st.write(f"- **Target Location:** {loc}")
@@ -320,7 +322,7 @@ def show_confirmation_dialog():
                     "PO Number": str(po),
                     "Min Qty": int(min_qty)
                 }).execute()
-                log_event("Added", pnum, pname, f"Registered new item. Initial Qty {amt} at {loc}. Proj: {proj}, PO#: {po}", project_under=proj, part_type=ptype, manufacturer=mfg)
+                log_event("Added", pnum, pname, f"Registered new stock entry. Initial Qty {amt} at {loc}. Proj: {proj}, PO#: {po}", project_under=proj, part_type=ptype, manufacturer=mfg)
             else:
                 query = supabase.table("Inventory").update({
                     "Qty on Hand": current_qty + amt,
@@ -334,6 +336,7 @@ def show_confirmation_dialog():
                 log_event(log_action_name, pnum, pname, f"{'Correction' if is_corr_dialog else 'Added'}: Adjusted +{amt} units at [{loc}] under '{proj}'. New Total: {current_qty + amt}.", project_under=proj, part_type=ptype, manufacturer=mfg)
             
             st.session_state["pending_action"] = None
+            st.session_state["show_new_part_form"] = False
             st.success("Stock updated permanently!")
             st.rerun()
 
@@ -606,12 +609,11 @@ if 'id' in df.columns:
 else:
     active_df = df[display_cols_order].copy()
 
-# 10 DEDICATED TABS
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
+# 9 CLEAN ORIGINAL TABS
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     "Scan Search", 
     "Location Search",
     "Project & PO Search",
-    "Register Part",
     "Receive / Add Stock", 
     "Take Inventory", 
     "Alter Part",
@@ -908,123 +910,9 @@ with tab3:
         else:
             st.warning("No items currently registered matching selected Project or PO criteria.")
 
-# --- TAB 4: REGISTER PART (NEW DEDICATED REGISTRATION TAB) ---
+# --- TAB 4: RECEIVE / ADD STOCK (DIRECT ADD & SEPARATE STOCK FLOW) ---
 with tab4:
-    st.header("Register a New Item in Database")
-    st.info("💡 Use this tab to create a brand new item entry or register an existing catalog part under a new location/project.")
-    
-    # Optional Template Autofill from Existing Catalog
-    st.subheader("1. Part Details")
-    use_existing_template = st.checkbox("Autofill specs from an existing catalog part", value=False, key="reg_use_template")
-    
-    init_pnum = ""
-    init_pname = ""
-    init_mfg = "N/A"
-    init_ptype = ""
-    
-    if use_existing_template and not active_df.empty:
-        # Unique part templates
-        template_df = active_df.drop_duplicates(subset=['Part Number', 'Part Name']).copy()
-        template_opts = ["-- Select an existing part to autofill --"] + [f"{r['Part Name']} (#{r['Part Number']}) | Mfg: {format_na_str(r['Manufacturer'])} | Type: {r['Part Type']}" for _, r in template_df.iterrows()]
-        sel_temp = st.selectbox("Search & pick from existing parts:", template_opts, key="reg_template_select")
-        
-        if sel_temp != "-- Select an existing part to autofill --":
-            chosen_idx = template_opts.index(sel_temp) - 1
-            matched_row = template_df.iloc[chosen_idx]
-            init_pnum = str(matched_row['Part Number'])
-            init_pname = str(matched_row['Part Name'])
-            init_mfg = format_na_str(matched_row['Manufacturer'])
-            init_ptype = str(matched_row['Part Type'])
-            st.success(f"Autofilled specs for `{init_pnum}` ({init_pname}). Proceed below with project, location, and quantities.")
-            
-    col_reg1, col_reg2 = st.columns(2)
-    new_num = col_reg1.text_input("Part Number:", value=init_pnum, key="reg_part_num_input").strip()
-    new_name = col_reg2.text_input("Part Name:", value=init_pname, key="reg_part_name_input").strip()
-    
-    col_reg_m1, col_reg_m2 = st.columns(2)
-    # Manufacturer Selector
-    known_mfgs = sorted([m for m in active_df['Manufacturer'].dropna().astype(str).unique() if m.strip() and m != "N/A"])
-    if init_mfg != "N/A" and init_mfg not in known_mfgs:
-        known_mfgs.append(init_mfg)
-    mfg_options = ["N/A"] + known_mfgs + ["+ Add New Manufacturer"]
-    def_mfg_idx = mfg_options.index(init_mfg) if init_mfg in mfg_options else 0
-    selected_mfg_opt = col_reg_m1.selectbox("Manufacturer:", options=mfg_options, index=def_mfg_idx, key="reg_mfg_select")
-    new_mfg = col_reg_m1.text_input("Enter New Manufacturer Name:", key="reg_mfg_custom").strip() if selected_mfg_opt == "+ Add New Manufacturer" else selected_mfg_opt
-    
-    # Part Type Selector
-    known_types = sorted([t for t in active_df['Part Type'].dropna().astype(str).unique() if t.strip()])
-    if init_ptype and init_ptype not in known_types:
-        known_types.append(init_ptype)
-    type_options = known_types + ["+ Add New Part Type"]
-    def_type_idx = type_options.index(init_ptype) if init_ptype in type_options else 0
-    selected_type_opt = col_reg_m2.selectbox("Part Type:", options=type_options, index=def_type_idx, key="reg_part_type_select")
-    new_type = col_reg_m2.text_input("Enter New Part Type Name:", key="reg_part_type_custom").strip() if selected_type_opt == "+ Add New Part Type" else selected_type_opt
-    
-    st.subheader("2. Stock & Storage Details")
-    new_qty = st.number_input("Initial Quantity to Stock:", min_value=1, step=10, value=10, key="reg_part_qty_input")
-    new_loc = st.text_input("Storage Location (Must be a registered section, e.g. A1, G3, J2):", key="reg_part_loc_input").strip().upper()
-    
-    col_reg_p1, col_reg_p2 = st.columns(2)
-    known_projs = sorted([p for p in active_df['Project Under'].dropna().astype(str).unique() if p.strip()])
-    proj_options = known_projs + ["+ Add New Project"]
-    selected_proj_opt = col_reg_p1.selectbox("Project Under:", options=proj_options, key="reg_proj_select")
-    new_proj = col_reg_p1.text_input("Enter New Project Name:", key="reg_proj_custom").strip() if selected_proj_opt == "+ Add New Project" else selected_proj_opt
-
-    known_pos = sorted([po for po in active_df['PO Number'].dropna().astype(str).unique() if po.strip() and po != "N/A"])
-    po_options = ["N/A"] + known_pos + ["+ Add New PO Number"]
-    selected_po_opt = col_reg_p2.selectbox("PO Number Ordered Under (Optional):", options=po_options, key="reg_po_select")
-    new_po = col_reg_p2.text_input("Enter New PO Number:", key="reg_po_custom").strip() if selected_po_opt == "+ Add New PO Number" else selected_po_opt
-    
-    new_min_qty = st.number_input("Minimum Quantity Alert Threshold (Optional, set 0 for None):", min_value=0, step=10, value=0, key="reg_part_min_qty")
-    
-    if st.button("Save & Register Item", type="primary"):
-        valid, formatted_loc = is_valid_location(new_loc, location_dict)
-        final_po = format_na_str(new_po)
-        final_mfg = format_na_str(new_mfg)
-        
-        norm_new_pnum = normalize_str(new_num)
-        norm_new_loc = normalize_str(formatted_loc)
-        norm_new_proj = normalize_str(new_proj)
-        
-        existing_exact = active_df[
-            (active_df['Part Number'].apply(normalize_str) == norm_new_pnum) &
-            (active_df['Location'].apply(normalize_str) == norm_new_loc) &
-            (active_df['Project Under'].apply(normalize_str) == norm_new_proj)
-        ]
-        
-        if not new_num:
-            st.error("Part Number is required.")
-        elif not new_name:
-            st.error("Part Name is required.")
-        elif not new_type:
-            st.error("Part Type is required.")
-        elif not new_proj:
-            st.error("Project Under is required.")
-        elif not valid:
-            st.error(f"⛔ Location '{new_loc}' is not registered! You must assign parts to an existing storage location (e.g. A1-I3) or register Section '{new_loc[:1]}' in Tab 2 first.")
-        elif not existing_exact.empty:
-            st.error(f"⛔ HALTED: Part `{new_num}` is ALREADY registered in Location [{formatted_loc}] under Project '{new_proj}'! Please use the 'Receive / Add Stock' tab to add more units to this existing listing.")
-        else:
-            st.session_state["pending_action"] = {
-                "type": "add",
-                "is_new": True,
-                "pnum": new_num,
-                "pname": new_name,
-                "mfg": final_mfg,
-                "amt": new_qty,
-                "loc": formatted_loc,
-                "proj": new_proj,
-                "ptype": new_type,
-                "po": final_po,
-                "min_qty": new_min_qty,
-                "is_correction": False
-            }
-            st.rerun()
-
-# --- TAB 5: RECEIVE / ADD STOCK (STRICT ROW BINDING) ---
-with tab5:
-    st.header("Receive / Add Stock to Existing Items")
-    st.caption("Select an existing part row to add incoming units directly to its inventory balance.")
+    st.header("Receive / Add Stock")
     
     col_f1, col_f2 = st.columns(2)
     existing_projects = ["All Projects"] + sorted(list(set(active_df['Project Under'].dropna().astype(str).unique())))
@@ -1036,65 +924,218 @@ with tab5:
     filtered_add_pool = apply_category_filters(active_df, selected_proj_add, selected_type_add)
     add_query = st.text_input("Type any part number, name, or character fragment to ADD stock:", key="add_input").strip()
     
+    show_new_form = False
+    
     if add_query:
         results = fuzzy_search_df(filtered_add_pool, add_query)
         if results.empty:
-            results = fuzzy_search_df(active_df, add_query)
-            if not results.empty:
-                st.warning("Found matching items in main database outside current project/type filters:")
+            global_check = fuzzy_search_df(active_df, add_query)
+            if not global_check.empty:
+                st.warning(f"No match found under current filters ('{selected_proj_add}' / '{selected_type_add}'), but found matching item(s) in main database:")
+                results = global_check
+            else:
+                st.warning(f"No existing items found matching '{add_query}'. Fill out the form below to register it as a brand new item:")
+                show_new_form = True
     else:
         results = filtered_add_pool
+        is_checked = st.checkbox("Register a Brand New Item (Not yet in database)", value=st.session_state["show_new_part_form"], key="new_item_chk")
+        st.session_state["show_new_part_form"] = is_checked
+        show_new_form = is_checked
+
+    # 1. BRAND NEW ITEM REGISTRATION
+    if show_new_form:
+        st.info("Register a brand new, previously unrecorded item:")
         
-    if results.empty:
-        st.warning("No registered items match your search. If this is a brand new part, please register it first in the 'Register Part' tab.")
-    else:
-        # Build strictly indexed dropdown referencing Supabase ID
+        new_num = st.text_input("Part Number:", value=add_query if add_query else "", key="new_part_num_input").strip()
+        new_name = st.text_input("Part Name:", key="new_part_name_input").strip()
+        
+        col_m1, col_m2 = st.columns(2)
+        known_mfgs = sorted([m for m in active_df['Manufacturer'].dropna().astype(str).unique() if m.strip() and m != "N/A"])
+        mfg_options = ["N/A"] + known_mfgs + ["+ Add New Manufacturer"]
+        selected_mfg_opt = col_m1.selectbox("Manufacturer:", options=mfg_options, key="new_mfg_select")
+        new_mfg = col_m1.text_input("Enter New Manufacturer Name:", key="new_mfg_custom").strip() if selected_mfg_opt == "+ Add New Manufacturer" else selected_mfg_opt
+        
+        known_types = sorted([t for t in active_df['Part Type'].dropna().astype(str).unique() if t.strip()])
+        type_options = known_types + ["+ Add New Part Type"]
+        selected_type_opt = col_m2.selectbox("Part Type:", options=type_options, key="new_part_type_select")
+        new_type = col_m2.text_input("Enter New Part Type Name:", key="new_part_type_custom").strip() if selected_type_opt == "+ Add New Part Type" else selected_type_opt
+            
+        new_qty = st.number_input("Initial Quantity:", min_value=1, step=10, value=10, key="new_part_qty_input")
+        new_loc = st.text_input("Storage Location (Must be a registered section, e.g. A1, G3, J2):", key="new_part_loc_input").strip().upper()
+        
+        col_n1, col_n2 = st.columns(2)
+        known_projs = sorted([p for p in active_df['Project Under'].dropna().astype(str).unique() if p.strip()])
+        proj_options = known_projs + ["+ Add New Project"]
+        selected_proj_opt = col_n1.selectbox("Project Under:", options=proj_options, key="new_proj_select")
+        new_proj = col_n1.text_input("Enter New Project Name:", key="new_proj_custom").strip() if selected_proj_opt == "+ Add New Project" else selected_proj_opt
+
+        known_pos = sorted([po for po in active_df['PO Number'].dropna().astype(str).unique() if po.strip() and po != "N/A"])
+        po_options = ["N/A"] + known_pos + ["+ Add New PO Number"]
+        selected_po_opt = col_n2.selectbox("PO Number Ordered Under (Optional):", options=po_options, key="new_po_select")
+        new_po = col_n2.text_input("Enter New PO Number:", key="new_po_custom").strip() if selected_po_opt == "+ Add New PO Number" else selected_po_opt
+        
+        new_min_qty = st.number_input("Minimum Quantity Alert Threshold (Optional, set 0 for None):", min_value=0, step=10, value=0, key="new_part_min_qty")
+        
+        if st.button("Save Brand New Item"):
+            valid, formatted_loc = is_valid_location(new_loc, location_dict)
+            final_po = format_na_str(new_po)
+            final_mfg = format_na_str(new_mfg)
+            
+            norm_new_pnum = normalize_str(new_num)
+            norm_new_loc = normalize_str(formatted_loc)
+            norm_new_proj = normalize_str(new_proj)
+            
+            existing_exact = active_df[
+                (active_df['Part Number'].apply(normalize_str) == norm_new_pnum) &
+                (active_df['Location'].apply(normalize_str) == norm_new_loc) &
+                (active_df['Project Under'].apply(normalize_str) == norm_new_proj)
+            ]
+            
+            if not new_num:
+                st.error("Part Number is required.")
+            elif not new_name:
+                st.error("Part Name is required.")
+            elif not new_type:
+                st.error("Part Type is required.")
+            elif not new_proj:
+                st.error("Project Under is required.")
+            elif not valid:
+                st.error(f"⛔ Location '{new_loc}' is not registered! You must assign parts to an existing storage location (e.g. A1-I3) or register Section '{new_loc[:1]}' in Tab 2 first.")
+            elif not existing_exact.empty:
+                st.error(f"⛔ HALTED: Part `{new_num}` is already registered in Location [{formatted_loc}] under Project '{new_proj}'! Please select it from the list above to add units.")
+            else:
+                st.session_state["pending_action"] = {
+                    "type": "add",
+                    "is_new": True,
+                    "pnum": new_num,
+                    "pname": new_name,
+                    "mfg": final_mfg,
+                    "amt": new_qty,
+                    "loc": formatted_loc,
+                    "proj": new_proj,
+                    "ptype": new_type,
+                    "po": final_po,
+                    "min_qty": new_min_qty,
+                    "is_correction": False
+                }
+                st.rerun()
+
+    # 2. EXISTING PART STOCK ADDITION & SEPARATE STOCK REGISTRATION
+    elif not results.empty:
+        if add_query:
+            st.success(f"Found {len(results)} matching item(s):")
+        
+        # Strict row selection bound to row index and database ID
         options = [f"{row['Part Name']} (#{row['Part Number']}) | Mfg: {format_na_str(row['Manufacturer'])} | Type: {row['Part Type']} | Proj: {row['Project Under']} | PO#: {format_na_str(row['PO Number'])} | Qty: {row['Qty on Hand']} | Loc: {row['Location']} (ID: {row.get('id', 'N/A')})" for idx, row in results.iterrows()]
         choice = st.selectbox("Select the exact item row you are receiving stock for:", options, key="add_select")
         row_idx = results.index[options.index(choice)]
         
         target_id = active_df.at[row_idx, 'id'] if 'id' in active_df.columns else None
-        target_pnum = active_df.at[row_idx, 'Part Number']
-        target_pname = active_df.at[row_idx, 'Part Name']
-        target_mfg = format_na_str(active_df.at[row_idx, 'Manufacturer'])
-        target_loc = str(active_df.at[row_idx, 'Location'])
-        target_proj = str(active_df.at[row_idx, 'Project Under'])
-        target_po = format_na_str(active_df.at[row_idx, 'PO Number'])
-        target_ptype = active_df.at[row_idx, 'Part Type']
+        base_pnum = active_df.at[row_idx, 'Part Number']
+        base_pname = active_df.at[row_idx, 'Part Name']
+        base_mfg = format_na_str(active_df.at[row_idx, 'Manufacturer'])
+        base_ptype = active_df.at[row_idx, 'Part Type']
+        curr_row_loc = str(active_df.at[row_idx, 'Location'])
+        curr_row_proj = str(active_df.at[row_idx, 'Project Under'])
+        curr_row_po = format_na_str(active_df.at[row_idx, 'PO Number'])
         current_qty = int(active_df.at[row_idx, 'Qty on Hand'])
         current_min_qty = int(active_df.at[row_idx, 'Min Qty'])
         
         st.markdown("---")
-        st.write(f"Receiving stock into: **{target_pname}** (`{target_pnum}`)")
-        st.write(f"- **Project:** `{target_proj}` | **Location:** `[{target_loc}]` | **Current Stock on Hand:** **{current_qty}** units")
         
-        col_amt1, col_amt2 = st.columns(2)
-        amt_to_add = col_amt1.number_input("How many units are you adding?", min_value=1, step=10, value=10, key="add_amt_direct")
-        updated_min_qty = col_amt2.number_input("Update Minimum Quantity Threshold (Optional):", min_value=0, step=10, value=current_min_qty, key="add_min_qty_direct")
+        # Checkbox to toggle registering separate stock (new location/project for same part)
+        register_separate = st.checkbox("➕ Register separate stock (different location or project for this same part)", value=False, key="chk_reg_separate")
         
-        is_corr = st.checkbox("System Count Correction (Inventory discrepancy true-up, not a new delivery)", key="add_corr_direct")
-        
-        if st.button("Confirm Addition", type="primary"):
-            st.session_state["pending_action"] = {
-                "type": "add",
-                "is_new": False,
-                "target_id": target_id,
-                "pnum": target_pnum,
-                "pname": target_pname,
-                "mfg": target_mfg,
-                "amt": amt_to_add,
-                "loc": target_loc,
-                "proj": target_proj,
-                "ptype": target_ptype,
-                "po": target_po,
-                "current_qty": current_qty,
-                "min_qty": updated_min_qty,
-                "is_correction": is_corr
-            }
-            st.rerun()
+        if not register_separate:
+            # DIRECT ADD FLOW (Locks to chosen part row)
+            st.write(f"Receiving incoming units directly for **{base_pname}** (`{base_pnum}`):")
+            st.write(f"- **Project:** `{curr_row_proj}` | **Location:** `[{curr_row_loc}]` | **Current Stock on Hand:** **{current_qty}** units")
+            
+            col_amt1, col_amt2 = st.columns(2)
+            amt_to_add = col_amt1.number_input("How many units are you adding?", min_value=1, step=10, value=10, key="add_amt_direct")
+            updated_min_qty = col_amt2.number_input("Update Minimum Quantity Threshold (Optional):", min_value=0, step=10, value=current_min_qty, key="add_min_qty_direct")
+            is_corr = st.checkbox("System Count Correction (Inventory discrepancy true-up, not a new delivery)", key="add_corr_direct")
+            
+            if st.button("Confirm Addition", type="primary"):
+                st.session_state["pending_action"] = {
+                    "type": "add",
+                    "is_new": False,
+                    "target_id": target_id,
+                    "pnum": base_pnum,
+                    "pname": base_pname,
+                    "mfg": base_mfg,
+                    "amt": amt_to_add,
+                    "loc": curr_row_loc,
+                    "proj": curr_row_proj,
+                    "ptype": base_ptype,
+                    "po": curr_row_po,
+                    "current_qty": current_qty,
+                    "min_qty": updated_min_qty,
+                    "is_correction": is_corr
+                }
+                st.rerun()
+        else:
+            # SEPARATE STOCK REGISTRATION FLOW
+            st.info(f"Registering a new storage/project entry using specs from **{base_pname}** (`{base_pnum}`):")
+            
+            col_sep1, col_sep2 = st.columns(2)
+            amt_to_add = col_sep1.number_input("Quantity for this new entry:", min_value=1, step=10, value=10, key="add_amt_sep")
+            sep_min_qty = col_sep2.number_input("Minimum Quantity Alert Level:", min_value=0, step=10, value=0, key="add_min_qty_sep")
+            
+            col_sep_p, col_sep_po = st.columns(2)
+            known_projs = sorted([p for p in active_df['Project Under'].dropna().astype(str).unique() if p.strip()])
+            proj_opts = known_projs + ["+ Add New Project"]
+            def_proj_idx = proj_opts.index(curr_row_proj) if curr_row_proj in proj_opts else 0
+            selected_proj_opt = col_sep_p.selectbox("Project Under:", options=proj_opts, index=def_proj_idx, key="sep_proj_select")
+            final_dest_proj = col_sep_p.text_input("Enter New Project Name:", key="sep_proj_custom").strip() if selected_proj_opt == "+ Add New Project" else selected_proj_opt
+            
+            known_pos = sorted([po for po in active_df['PO Number'].dropna().astype(str).unique() if po.strip() and po != "N/A"])
+            po_opts = ["N/A"] + known_pos + ["+ Add New PO Number"]
+            selected_po_opt = col_sep_po.selectbox("PO Number Ordered Under (Optional):", options=po_opts, key="sep_po_select")
+            final_dest_po = col_sep_po.text_input("Enter New PO Number:", key="sep_po_custom").strip() if selected_po_opt == "+ Add New PO Number" else selected_po_opt
+            
+            final_dest_loc = st.text_input("New Storage Location:", value="", key="sep_loc_input").strip().upper()
+            
+            if st.button("Save Separate Stock Entry", type="primary"):
+                valid, formatted_dest_loc = is_valid_location(final_dest_loc, location_dict)
+                if not final_dest_proj:
+                    st.error("Project Under is required.")
+                elif not valid:
+                    st.error(f"⛔ Location '{final_dest_loc}' is not registered! You must assign parts to an existing storage location (e.g. A1-I3) or register Section '{final_dest_loc[:1]}' in Tab 2 first.")
+                else:
+                    norm_pnum = normalize_str(base_pnum)
+                    norm_loc = normalize_str(formatted_dest_loc)
+                    norm_proj = normalize_str(final_dest_proj)
+                    
+                    match_existing = active_df[
+                        (active_df['Part Number'].apply(normalize_str) == norm_pnum) &
+                        (active_df['Location'].apply(normalize_str) == norm_loc) &
+                        (active_df['Project Under'].apply(normalize_str) == norm_proj)
+                    ]
+                    
+                    if not match_existing.empty:
+                        st.error(f"⛔ Part `{base_pnum}` is already registered at [{formatted_dest_loc}] under Project '{final_dest_proj}'! Please uncheck 'Register separate stock' and select that row directly to add units.")
+                    else:
+                        st.session_state["pending_action"] = {
+                            "type": "add",
+                            "is_new": True,
+                            "target_id": None,
+                            "pnum": base_pnum,
+                            "pname": base_pname,
+                            "mfg": base_mfg,
+                            "amt": amt_to_add,
+                            "loc": formatted_dest_loc,
+                            "proj": final_dest_proj,
+                            "ptype": base_ptype,
+                            "po": format_na_str(final_dest_po),
+                            "current_qty": 0,
+                            "min_qty": sep_min_qty,
+                            "is_correction": False
+                        }
+                        st.rerun()
 
-# --- TAB 6: TAKE INVENTORY ---
-with tab6:
+# --- TAB 5: TAKE INVENTORY ---
+with tab5:
     st.header("Remove / Assemble Stock")
     
     col_f1, col_f2 = st.columns(2)
@@ -1149,8 +1190,8 @@ with tab6:
             }
             st.rerun()
 
-# --- TAB 7: ALTER PART ---
-with tab7:
+# --- TAB 6: ALTER PART ---
+with tab6:
     st.header("Alter Part Attributes")
     
     col_f1, col_f2 = st.columns(2)
@@ -1290,8 +1331,8 @@ with tab7:
                     }
                 st.rerun()
 
-# --- TAB 8: CHANGE LOCATION ---
-with tab8:
+# --- TAB 7: CHANGE LOCATION ---
+with tab7:
     st.header("Move Parts to a New Location")
     loc_query = st.text_input("Type any part number, name, or character fragment to change its LOCATION:", key="loc_input").strip()
     
@@ -1332,8 +1373,8 @@ with tab8:
                     }
                     st.rerun()
 
-# --- TAB 9: LOG HISTORY (WITH SEARCH BAR & DATE PICKER) ---
-with tab9:
+# --- TAB 8: LOG HISTORY (WITH PART SEARCH & CALENDAR PICKER) ---
+with tab8:
     st.header("Activity Log History")
     log_df = load_logs()
     
@@ -1346,7 +1387,7 @@ with tab9:
         min_date = valid_dates.min().date() if not valid_dates.empty else pd.Timestamp.today().date()
         today_date = pd.Timestamp.today().date()
         
-        # Individual part search matching Tab 1
+        # Individual part search input in Log History
         log_search_query = st.text_input("Search Logs by Part Name, Part Number, Manufacturer, Project, or Details:", key="log_search_input").strip()
         
         col_cal1, col_cal2 = st.columns([1.5, 2.5])
@@ -1392,8 +1433,8 @@ with tab9:
         display_logs = filtered_logs.drop(columns=['Timestamp_DT'], errors='ignore')
         st.dataframe(display_logs.iloc[::-1], use_container_width=True)
 
-# --- TAB 10: FULL INVENTORY TABLE ---
-with tab10:
+# --- TAB 9: FULL INVENTORY TABLE ---
+with tab9:
     st.header("Full Live Inventory Grid View")
     st.caption("Hover over the table top-right corner to search, sort columns, or click Fullscreen.")
     
@@ -1446,6 +1487,7 @@ else:
         key="low_stock_editor"
     )
     
+    # Check for direct PO edits in data editor and update Supabase seamlessly
     for idx, r in edited_df.iterrows():
         current_entered_po = format_na_str(r['PO Number'])
         original_po = display_df.loc[idx, 'PO Number']
@@ -1464,6 +1506,7 @@ else:
             log_event("Altered", p_num, r['Part Name'], f"Updated PO# from {original_po} to {current_entered_po}", project_under=p_proj, manufacturer=r['Manufacturer'])
             st.rerun()
 
+    # Generate Clipboard Text including typed Order Qty
     copy_text_lines = ["Part Name\tPart Number\tManufacturer\tCurrent Qty\tLocation\tPO Under\tProject Under\tOrder Qty"]
     for _, r in edited_df.iterrows():
         order_val = int(r['Order Qty']) if pd.notna(r['Order Qty']) and r['Order Qty'] > 0 else ""
